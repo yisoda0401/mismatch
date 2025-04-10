@@ -8,7 +8,7 @@ import io
 ET.register_namespace('xml', 'http://www.w3.org/XML/1998/namespace')
 
 st.set_page_config(page_title="TMX分析ツール", layout="wide")
-st.title("TMX分析ツール")
+st.title("TMX分析ツール（ベータ）")
 st.subheader("日本語訳に含まれる英単語が英語原文に存在するか確認")
 
 uploaded_file = st.file_uploader("TMXファイルをアップロード", type=["tmx"])
@@ -21,8 +21,30 @@ with st.expander("除外設定", expanded=False):
     以下の形式で除外したいペアを入力してください。各行に「原語,訳語」の形式で入力します。
     例: `web,Web` （原語に"web"が含まれ、訳語に"Web"が含まれる場合、このペアを検出対象から除外）
     """)
+    # デフォルトの除外ペア設定
+    default_exclusion_pairs = """APIs,API
+CPUs,CPU
+CRs,CR
+GPUs,GPU
+IDs,ID
+ISOs,ISO
+LUNs,LUN
+NICs,NIC
+Operators,Operator
+playbook,Playbook
+playbooks,Playbook
+pod,Pod
+pods,Pod
+RPMs,RPM
+URLs,URL
+vCPU,CPU
+VMs,VM
+VPNs,VPN
+web,Web"""
+    
     exclusion_pairs_text = st.text_area(
         "除外ペア (各行に「原語,訳語」の形式で入力)",
+        value=default_exclusion_pairs,
         height=150,
         help="各行に「原語,訳語」の形式で入力。大文字小文字は区別されます。"
     )
@@ -85,8 +107,8 @@ def analyze_tmx(file_content, exclusion_pairs):
             namespaces['xml'] = 'http://www.w3.org/XML/1998/namespace'
         
         # デバッグ情報
-        st.info(f"検出された名前空間: {namespaces}")
-        st.info(f"ルート要素: {root.tag}")
+        # st.info(f"検出された名前空間: {namespaces}")
+        # st.info(f"ルート要素: {root.tag}")
         
         results = []
         excluded_count = 0
@@ -172,10 +194,11 @@ def analyze_tmx(file_content, exclusion_pairs):
                     "英語原文": en_text,
                     "日本語訳": ja_text,
                     "日本語訳に含まれる英単語": ", ".join(ja_eng_words) if ja_eng_words else "なし",
-                    "大/小文字区別: 原文に存在しない英単語": ", ".join(missing_words_case_sensitive) if missing_words_case_sensitive else "なし",
-                    "大/小文字無視: 原文に存在しない英単語": ", ".join(missing_words_case_insensitive) if missing_words_case_insensitive else "なし",
+                    "大/小文字区別": ", ".join(missing_words_case_sensitive) if missing_words_case_sensitive else "なし",
+                    "大/小文字無視": ", ".join(missing_words_case_insensitive) if missing_words_case_insensitive else "なし",
                     "要確認(大/小文字区別)": len(missing_words_case_sensitive) > 0,
-                    "要確認(大/小文字無視)": len(missing_words_case_insensitive) > 0
+                    "要確認(大/小文字無視)": len(missing_words_case_insensitive) > 0,
+                    "修正済み": False  # 追加: チェックボックス列のデフォルト値
                 })
         
         if excluded_count > 0:
@@ -195,39 +218,6 @@ def analyze_tmx(file_content, exclusion_pairs):
         import traceback
         st.code(traceback.format_exc())
         return None
-
-def display_with_details(df, index):
-    """詳細表示用の関数: インデックスに対応する行の詳細を表示"""
-    row = df.iloc[index]
-    with st.expander(f"セグメント #{index+1} の詳細", expanded=True):
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown("### 英語原文")
-            st.text_area("", value=row["英語原文"], height=68, key=f"en_text_{index}")
-        with col2:
-            st.markdown("### 日本語訳")
-            st.text_area("", value=row["日本語訳"], height=68, key=f"ja_text_{index}")
-        
-        st.markdown("### 分析結果")
-        col3, col4 = st.columns(2)
-        with col3:
-            st.markdown("**日本語訳に含まれる英単語:**")
-            st.text(row["日本語訳に含まれる英単語"])
-        
-        with col4:
-            st.markdown("**大/小文字区別: 原文に存在しない英単語:**")
-            missing_words = row["大/小文字区別: 原文に存在しない英単語"]
-            if row["要確認(大/小文字区別)"]:
-                st.markdown(f"<span style='color:red'>{missing_words}</span>", unsafe_allow_html=True)
-            else:
-                st.text(missing_words)
-            
-            st.markdown("**大/小文字無視: 原文に存在しない英単語:**")
-            missing_words = row["大/小文字無視: 原文に存在しない英単語"]
-            if row["要確認(大/小文字無視)"]:
-                st.markdown(f"<span style='color:red'>{missing_words}</span>", unsafe_allow_html=True)
-            else:
-                st.text(missing_words)
 
 if uploaded_file is not None:
     file_content = uploaded_file.read()
@@ -253,16 +243,11 @@ if uploaded_file is not None:
         filter_option = st.radio(
             "表示オプション:",
             ["すべて表示", "要確認のみ(大/小文字区別)", "要確認のみ(大/小文字無視)", "いずれかの方法で要確認"],
+            index=3,  # 「いずれかの方法で要確認」がデフォルトで選択される
             horizontal=True
         )
         
-        # 表示モード選択
-        display_mode = st.radio(
-            "表示モード:",
-            ["テーブル表示", "詳細表示"],
-            horizontal=True
-        )
-        
+        # フィルタリングを適用する部分
         if filter_option == "要確認のみ(大/小文字区別)":
             filtered_df = df[df["要確認(大/小文字区別)"] == True]
         elif filter_option == "要確認のみ(大/小文字無視)":
@@ -272,41 +257,64 @@ if uploaded_file is not None:
         else:
             filtered_df = df
         
-        if display_mode == "テーブル表示":
-            # テーブル表示モード
-            # スタイル付きデータフレーム表示
-            def highlight_missing(s):
-                return ['background-color: #ffcccc' if v else '' for v in s]
-            
-            # 簡易表示用のデータフレームを作成（長いテキストは省略）
-            display_df = filtered_df.copy()
-            display_df["英語原文"] = display_df["英語原文"].apply(lambda x: (x[:100] + '...') if len(x) > 100 else x)
-            display_df["日本語訳"] = display_df["日本語訳"].apply(lambda x: (x[:100] + '...') if len(x) > 100 else x)
-            
-            styled_df = display_df.style.apply(
-                lambda x: highlight_missing(x == True), 
-                subset=["要確認(大/小文字区別)", "要確認(大/小文字無視)"]
-            )
-            
-            # データフレームを表示
-            st.dataframe(styled_df, use_container_width=True)
-            
-        else:
-            # 詳細表示モード
-            st.write(f"全 {len(filtered_df)} 件のセグメントを表示")
-            
-            # 詳細表示用のページネーション
-            items_per_page = 10
-            page = st.number_input("ページ", min_value=1, max_value=max(1, (len(filtered_df) + items_per_page - 1) // items_per_page), value=1)
-            start_idx = (page - 1) * items_per_page
-            end_idx = min(start_idx + items_per_page, len(filtered_df))
-            
-            for i in range(start_idx, end_idx):
-                display_with_details(filtered_df, i)
-                st.divider()
+        # 表示する列を選択（フィルタオプションに基づいて動的に調整）
+        # 基本列（"修正済み"列は除外して後で追加する）
+        base_columns = ["英語原文", "日本語訳"]
         
-        # ダウンロードボタン
-        csv = filtered_df.to_csv(index=False).encode('utf-8-sig')
+        # フィルタオプションに基づいて表示列を決定
+        if filter_option == "要確認のみ(大/小文字区別)":
+            columns_to_display = base_columns + ["大/小文字区別", "修正済み"]
+        elif filter_option == "要確認のみ(大/小文字無視)":
+            columns_to_display = base_columns + ["大/小文字無視", "修正済み"]
+        else:
+            columns_to_display = base_columns + ["大/小文字区別", "大/小文字無視", "修正済み"]
+            
+        # 表示用のデータフレームを作成（選択された列のみ）
+        filtered_df = filtered_df[columns_to_display]
+        
+        # テーブル表示モード
+        # 列の設定を定義
+        column_config = {
+            "修正済み": st.column_config.CheckboxColumn(
+                "修正済み",
+                help="修正が完了した項目にチェックを入れてください",
+                default=False,
+                width="small"
+            ),
+            "英語原文": st.column_config.TextColumn(
+                "英語原文",
+                width="large"
+            ),
+            "日本語訳": st.column_config.TextColumn(
+                "日本語訳",
+                width="large"
+            ),
+            "大/小文字区別": st.column_config.TextColumn(
+                "大/小文字区別",
+                width="small"
+            ),
+            "大/小文字無視": st.column_config.TextColumn(
+                "大/小文字無視",
+                width="small"
+            )
+        }
+        
+        # データフレームを表示（チェックボックス列の設定を適用）
+        edited_df = st.data_editor(
+            filtered_df,
+            column_config=column_config,
+            use_container_width=True,
+            hide_index=True
+        )
+        
+        # 変更が行われた場合の処理（オプション）
+        if not filtered_df.equals(edited_df):
+            st.success("データが更新されました")
+            # 更新されたデータをセッションステートに保存することもできます
+            st.session_state.edited_data = edited_df
+        
+        # ダウンロードボタン（編集後のデータをダウンロード）
+        csv = edited_df.to_csv(index=False).encode('utf-8-sig')
         st.download_button(
             label="CSV形式でダウンロード",
             data=csv,
@@ -326,16 +334,15 @@ with st.expander("使い方"):
     1. 上部の「Browse files」ボタンをクリックしてTMXファイルをアップロードします
     2. 必要に応じて「除外設定」で除外する原語・訳語ペアを設定します
     3. アプリが自動的にファイルを分析し、結果を表示します
-    4. 「要確認」列が赤くハイライトされている行は、日本語訳に含まれる英単語が英語原文に存在しない可能性があります
-    5. 表示モードを選択できます：
-       - テーブル表示：一覧形式で確認（長いテキストは省略）
-       - 詳細表示：折り返し可能なテキストエリアで原文と訳文を確認
+    4. セルをダブルクリックすると、長いテキストも省略されずに全文が表示されます
+    5. 「要確認」列が赤くハイライトされている行は、日本語訳に含まれる英単語が英語原文に存在しない可能性があります
     6. 「表示オプション」で結果を絞り込むことができます：
        - すべて表示：すべての翻訳セグメントを表示
-       - 要確認のみ(大/小文字区別)：大文字小文字を区別して不一致がある行のみ表示
-       - 要確認のみ(大/小文字無視)：大文字小文字を無視して不一致がある行のみ表示
-       - いずれかの方法で要確認：いずれかの方法で不一致がある行を表示
-    7. 分析結果はCSV形式でダウンロードできます
+       - 要確認のみ(大/小文字区別)：大文字小文字を区別して不一致がある行のみ表示（「大/小文字区別」列のみ表示）
+       - 要確認のみ(大/小文字無視)：大文字小文字を無視して不一致がある行のみ表示（「大/小文字無視」列のみ表示）
+       - いずれかの方法で要確認：いずれかの方法で不一致がある行を表示（両方の列を表示）
+    7. 「修正済み」列のチェックボックスで、確認・修正が完了した項目を記録できます
+    8. 分析結果はCSV形式でダウンロードできます（チェックボックスの状態も保存されます）
     
     ### 除外設定について
     
