@@ -17,29 +17,27 @@ uploaded_file = st.file_uploader("TMXファイルをアップロード", type=["
 with st.expander("除外設定", expanded=False):
     st.markdown("""
     ### 除外する原語・訳語ペアの設定
-    
+
     以下の形式で除外したいペアを入力してください。各行に「原語,訳語」の形式で入力します。
-    例: `web,Web` （原語に"web"が含まれ、訳語に"Web"が含まれる場合、このペアを検出対象から除外）
+
+    #### 基本的な使い方
+    - 例: `web,Web` （原語に"web"が含まれ、訳語に"Web"が含まれる場合、このペアを検出対象から除外）
+
+    #### 正規表現の使用方法
+    正規表現を使用する場合は、パターンの前に `r:` を付けてください。
+    - 例: `r:[A-Z][a-z]+,r:[A-Z][A-Z]+` （原語に先頭大文字の単語があり、訳語に全て大文字の単語がある場合を除外）
+    - 例: `r:\\bAPI\\b,r:\\bAPI\\b` （原語と訳語の両方に単語「API」がある場合を除外）
+
+    **注意**: 正規表現で `\\` のように特殊文字をエスケープする必要があります。例えば、単語の境界を示す `\\b` や単語文字を示す `\\w` など。
+
+    正規表現と通常の文字列を組み合わせることも可能です。
+    - 例: `Database,r:DB|データベース` （原語に"Database"が含まれ、訳語に"DB"または"データベース"が含まれる場合を除外）
     """)
-    # デフォルトの除外ペア設定
-    default_exclusion_pairs = """APIs,API
-CPUs,CPU
-CRs,CR
-GPUs,GPU
-IDs,ID
-ISOs,ISO
-LUNs,LUN
-NICs,NIC
-Operators,Operator
+    
+    # デフォルトの除外ペア設定に正規表現の例を追加
+    default_exclusion_pairs = """r:\\b\\w+[^s]s\\b,r:\\b\\w+\\b
 playbook,Playbook
-playbooks,Playbook
 pod,Pod
-pods,Pod
-RPMs,RPM
-URLs,URL
-vCPU,CPU
-VMs,VM
-VPNs,VPN
 web,Web"""
     
     exclusion_pairs_text = st.text_area(
@@ -87,8 +85,41 @@ def get_full_text_content(element):
 def should_exclude(en_text, ja_text, exclusion_pairs):
     """指定された除外ペアに基づいて、このセグメントを除外すべきかを判断"""
     for source, target in exclusion_pairs:
-        if source in en_text and target in ja_text:
-            return True
+        # 正規表現パターンかどうかを確認
+        source_is_regex = source.startswith('r:')
+        target_is_regex = target.startswith('r:')
+        
+        # 正規表現パターンの場合は先頭の 'r:' を削除
+        source_pattern = source[2:] if source_is_regex else source
+        target_pattern = target[2:] if target_is_regex else target
+        
+        # 条件チェック
+        source_match = False
+        target_match = False
+        
+        try:
+            if source_is_regex:
+                # 正規表現マッチングを実行
+                source_match = bool(re.search(source_pattern, en_text))
+            else:
+                # 通常の文字列検索
+                source_match = source in en_text
+                
+            if target_is_regex:
+                # 正規表現マッチングを実行
+                target_match = bool(re.search(target_pattern, ja_text))
+            else:
+                # 通常の文字列検索
+                target_match = target in ja_text
+                
+            # 両方マッチした場合は除外
+            if source_match and target_match:
+                return True
+        except re.error as e:
+            # 正規表現エラーを処理（ログに記録するなど）
+            st.warning(f"正規表現エラー: {str(e)} - パターン: '{source_pattern}' または '{target_pattern}'")
+            continue
+    
     return False
 
 def analyze_tmx(file_content, exclusion_pairs):
@@ -348,7 +379,8 @@ with st.expander("使い方"):
     
     「除外設定」では、特定の原語・訳語ペアを検出対象から除外できます。
     - 各行に「原語,訳語」の形式で入力します（例: `web,Web`）
-    - 原語に指定した文字列が英語原文に含まれ、かつ訳語に指定した文字列が日本語訳に含まれる場合、そのセグメントは分析結果から除外されます
+    - 正規表現を使用する場合は、パターンの前に `r:` を付けてください（例: `r:[A-Z][a-z]+,r:[A-Z][A-Z]+`）
+    - 原語に指定した文字列（または正規表現パターン）が英語原文に含まれ、かつ訳語に指定した文字列（または正規表現パターン）が日本語訳に含まれる場合、そのセグメントは分析結果から除外されます
     - これにより、意図的に大文字小文字を変更している場合などを無視できます
     
     ### 分析について
