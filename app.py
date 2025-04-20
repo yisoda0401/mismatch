@@ -148,7 +148,7 @@ def analyze_tmx(file_content, exclusion_pairs):
         tus = root.findall(".//tu") or root.findall(".//{*}tu")
         st.info(f"検出された翻訳ユニット数: {len(tus)}")
         
-        for tu in tus:
+        for idx, tu in enumerate(tus, 1):  # 1から始まるインデックスを付与
             en_text = ""
             ja_text = ""
             
@@ -222,14 +222,14 @@ def analyze_tmx(file_content, exclusion_pairs):
                         missing_words_case_insensitive.append(word)
                 
                 results.append({
+                    "ID": idx,  # 翻訳ユニットごとの一意のID
                     "英語原文": en_text,
                     "日本語訳": ja_text,
                     "日本語訳に含まれる英単語": ", ".join(ja_eng_words) if ja_eng_words else "なし",
                     "大/小文字区別": ", ".join(missing_words_case_sensitive) if missing_words_case_sensitive else "なし",
                     "大/小文字無視": ", ".join(missing_words_case_insensitive) if missing_words_case_insensitive else "なし",
                     "要確認(大/小文字区別)": len(missing_words_case_sensitive) > 0,
-                    "要確認(大/小文字無視)": len(missing_words_case_insensitive) > 0,
-                    "修正済み": False  # 追加: チェックボックス列のデフォルト値
+                    "要確認(大/小文字無視)": len(missing_words_case_insensitive) > 0
                 })
         
         if excluded_count > 0:
@@ -288,64 +288,94 @@ if uploaded_file is not None:
         else:
             filtered_df = df
         
-        # 表示する列を選択（フィルタオプションに基づいて動的に調整）
-        # 基本列（"修正済み"列は除外して後で追加する）
-        base_columns = ["英語原文", "日本語訳"]
+        # 表示する列を選択（IDは常に含める）
+        base_columns = ["ID", "英語原文", "日本語訳"]
         
         # フィルタオプションに基づいて表示列を決定
         if filter_option == "要確認のみ(大/小文字区別)":
-            columns_to_display = base_columns + ["大/小文字区別", "修正済み"]
+            columns_to_display = base_columns + ["大/小文字区別"]
         elif filter_option == "要確認のみ(大/小文字無視)":
-            columns_to_display = base_columns + ["大/小文字無視", "修正済み"]
+            columns_to_display = base_columns + ["大/小文字無視"]
         else:
-            columns_to_display = base_columns + ["大/小文字区別", "大/小文字無視", "修正済み"]
+            columns_to_display = base_columns + ["大/小文字区別", "大/小文字無視"]
             
         # 表示用のデータフレームを作成（選択された列のみ）
-        filtered_df = filtered_df[columns_to_display]
+        filtered_df = filtered_df[columns_to_display].copy()
         
-        # テーブル表示モード
-        # 列の設定を定義
-        column_config = {
-            "修正済み": st.column_config.CheckboxColumn(
-                "修正済み",
-                help="修正が完了した項目にチェックを入れてください",
-                default=False,
-                width="small"
-            ),
-            "英語原文": st.column_config.TextColumn(
-                "英語原文",
-                width="large"
-            ),
-            "日本語訳": st.column_config.TextColumn(
-                "日本語訳",
-                width="large"
-            ),
-            "大/小文字区別": st.column_config.TextColumn(
-                "大/小文字区別",
-                width="small"
-            ),
-            "大/小文字無視": st.column_config.TextColumn(
-                "大/小文字無視",
-                width="small"
-            )
-        }
+        # st.tableを使用する代わりに、HTMLとCSSでスタイル付きのテーブルを作成
+        html = """
+        <style>
+            .styled-table {
+                border-collapse: collapse;
+                width: 100%;
+                font-size: 14px;
+                text-align: left;
+            }
+            .styled-table th {
+                background-color: #f2f2f2;
+                color: #333;
+                font-weight: bold;
+                padding: 10px 8px;
+                border: 1px solid #ddd;
+            }
+            .styled-table td {
+                padding: 8px;
+                border: 1px solid #ddd;
+                word-wrap: break-word;
+                max-width: 400px;
+            }
+            .styled-table tr:nth-child(even) {
+                background-color: #f9f9f9;
+            }
+            .styled-table tr:nth-child(odd) {
+                background-color: #ffffff;
+            }
+            .styled-table tr:hover {
+                background-color: #e6f7ff;
+            }
+            .index-column {
+                width: 50px;
+                text-align: center;
+                font-weight: bold;
+            }
+        </style>
+
+        <table class="styled-table">
+            <thead>
+                <tr>
+        """
+
+        # テーブルヘッダーを作成
+        for col in filtered_df.columns:
+            # IDカラムには特別なクラスを適用
+            if col == "ID":
+                html += f"<th class=\"index-column\">{col}</th>"
+            else:
+                html += f"<th>{col}</th>"
+        html += "</tr></thead><tbody>"
+
+        # テーブルの行を作成
+        for _, row in filtered_df.iterrows():
+            html += "<tr>"
+            for col in filtered_df.columns:
+                cell_value = row[col]
+                # IDカラムには特別なクラスを適用
+                if col == "ID":
+                    html += f"<td class=\"index-column\">{cell_value}</td>"
+                # 「なし」という値は特別にスタイルを適用
+                elif col in ["大/小文字区別", "大/小文字無視"] and cell_value == "なし":
+                    html += f"<td style='color: green;'>{cell_value}</td>"
+                else:
+                    html += f"<td>{cell_value}</td>"
+            html += "</tr>"
+
+        html += "</tbody></table>"
+
+        # HTMLをレンダリング
+        st.write(html, unsafe_allow_html=True)
         
-        # データフレームを表示（チェックボックス列の設定を適用）
-        edited_df = st.data_editor(
-            filtered_df,
-            column_config=column_config,
-            use_container_width=True,
-            hide_index=True
-        )
-        
-        # 変更が行われた場合の処理（オプション）
-        if not filtered_df.equals(edited_df):
-            st.success("データが更新されました")
-            # 更新されたデータをセッションステートに保存することもできます
-            st.session_state.edited_data = edited_df
-        
-        # ダウンロードボタン（編集後のデータをダウンロード）
-        csv = edited_df.to_csv(index=False).encode('utf-8-sig')
+        # ダウンロードボタン
+        csv = filtered_df.to_csv(index=False).encode('utf-8-sig')
         st.download_button(
             label="CSV形式でダウンロード",
             data=csv,
@@ -365,15 +395,13 @@ with st.expander("使い方"):
     1. 上部の「Browse files」ボタンをクリックしてTMXファイルをアップロードします
     2. 必要に応じて「除外設定」で除外する原語・訳語ペアを設定します
     3. アプリが自動的にファイルを分析し、結果を表示します
-    4. セルをダブルクリックすると、長いテキストも省略されずに全文が表示されます
-    5. 「要確認」列が赤くハイライトされている行は、日本語訳に含まれる英単語が英語原文に存在しない可能性があります
-    6. 「表示オプション」で結果を絞り込むことができます：
+    4. 「要確認」列が赤くハイライトされている行は、日本語訳に含まれる英単語が英語原文に存在しない可能性があります
+    5. 「表示オプション」で結果を絞り込むことができます：
        - すべて表示：すべての翻訳セグメントを表示
        - 要確認のみ(大/小文字区別)：大文字小文字を区別して不一致がある行のみ表示（「大/小文字区別」列のみ表示）
        - 要確認のみ(大/小文字無視)：大文字小文字を無視して不一致がある行のみ表示（「大/小文字無視」列のみ表示）
        - いずれかの方法で要確認：いずれかの方法で不一致がある行を表示（両方の列を表示）
-    7. 「修正済み」列のチェックボックスで、確認・修正が完了した項目を記録できます
-    8. 分析結果はCSV形式でダウンロードできます（チェックボックスの状態も保存されます）
+    6. 分析結果はCSV形式でダウンロードできます
     
     ### 除外設定について
     
