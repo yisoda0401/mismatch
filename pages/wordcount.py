@@ -5,7 +5,7 @@ import io
 
 # ページ設定（ワイドモード）
 st.set_page_config(
-    page_title="TMXファイル解析アプリ",
+    page_title="TMXファイル文字数カウントツール",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"

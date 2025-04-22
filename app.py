@@ -8,7 +8,7 @@ import io
 ET.register_namespace('xml', 'http://www.w3.org/XML/1998/namespace')
 
 st.set_page_config(page_title="TMX分析ツール", layout="wide")
-st.title("TMX分析ツール（ベータ）")
+st.title("TMX分析ツール")
 st.subheader("日本語訳に含まれる英単語が英語原文に存在するか確認")
 
 uploaded_file = st.file_uploader("TMXファイルをアップロード", type=["tmx"])
@@ -25,13 +25,15 @@ with st.expander("除外設定", expanded=False):
 
     #### 正規表現の使用方法
     正規表現を使用する場合は、パターンの前に `r:` を付けてください。
+    - 例: `r:\\b\\w+[^s]s\\b,r:\\b\\w+\\b` （原語に複数形の単語があり、訳語が単数形の単語がある場合を除外）
     - 例: `r:[A-Z][a-z]+,r:[A-Z][A-Z]+` （原語に先頭大文字の単語があり、訳語に全て大文字の単語がある場合を除外）
-    - 例: `r:\\bAPI\\b,r:\\bAPI\\b` （原語と訳語の両方に単語「API」がある場合を除外）
 
     **注意**: 正規表現で `\\` のように特殊文字をエスケープする必要があります。例えば、単語の境界を示す `\\b` や単語文字を示す `\\w` など。
 
     正規表現と通常の文字列を組み合わせることも可能です。
     - 例: `Database,r:DB|データベース` （原語に"Database"が含まれ、訳語に"DB"または"データベース"が含まれる場合を除外）
+    
+    **注意**: maps/map、Insights/insight、CPUs/CPU などのペアはデフォルトで除外されます。除外しない場合は、下の正規表現 `r:\\b\\w+[^s]s\\b,r:\\b\\w+\\b` を削除してください。
     """)
     
     # デフォルトの除外ペア設定に正規表現の例を追加
@@ -125,7 +127,7 @@ def should_exclude(en_text, ja_text, exclusion_pairs):
 def analyze_tmx(file_content, exclusion_pairs):
     try:
         # デバッグ情報を表示
-        st.info("ファイルを解析中...")
+        # st.info("ファイルを解析中...")
         
         # XMLパーサーでファイルを解析
         tree = ET.parse(io.BytesIO(file_content))
@@ -146,7 +148,7 @@ def analyze_tmx(file_content, exclusion_pairs):
         
         # TMXファイルの構造に基づいて翻訳ユニットを探す
         tus = root.findall(".//tu") or root.findall(".//{*}tu")
-        st.info(f"検出された翻訳ユニット数: {len(tus)}")
+        # st.info(f"検出された翻訳ユニット数: {len(tus)}")
         
         for idx, tu in enumerate(tus, 1):  # 1から始まるインデックスを付与
             en_text = ""
@@ -396,12 +398,11 @@ with st.expander("使い方"):
     2. 必要に応じて「除外設定」で除外する原語・訳語ペアを設定します
     3. アプリが自動的にファイルを分析し、結果を表示します
     4. 「要確認」列が赤くハイライトされている行は、日本語訳に含まれる英単語が英語原文に存在しない可能性があります
-    5. 「表示オプション」で結果を絞り込むことができます：
        - すべて表示：すべての翻訳セグメントを表示
        - 要確認のみ(大/小文字区別)：大文字小文字を区別して不一致がある行のみ表示（「大/小文字区別」列のみ表示）
        - 要確認のみ(大/小文字無視)：大文字小文字を無視して不一致がある行のみ表示（「大/小文字無視」列のみ表示）
        - いずれかの方法で要確認：いずれかの方法で不一致がある行を表示（両方の列を表示）
-    6. 分析結果はCSV形式でダウンロードできます
+    5. 分析結果はCSV形式でダウンロードできます
     
     ### 除外設定について
     
