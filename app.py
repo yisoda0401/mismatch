@@ -38,9 +38,15 @@ with st.expander("除外設定", expanded=False):
     
     # デフォルトの除外ペア設定に正規表現の例を追加
     default_exclusion_pairs = """r:\\b\\w+[^s]s\\b,r:\\b\\w+\\b
+egress,Egress
+ingress,Ingress
 playbook,Playbook
 pod,Pod
-web,Web"""
+web,Web
+We,Red Hat
+vCPU,仮想 CPU
+VIP,仮想 IP
+manual page,man ページ"""
     
     exclusion_pairs_text = st.text_area(
         "除外ペア (各行に「原語,訳語」の形式で入力)",
