@@ -40,6 +40,7 @@ with st.expander("除外設定", expanded=False):
     default_exclusion_pairs = """r:\\b\\w+[^s]s\\b,r:\\b\\w+\\b
 egress,Egress
 ingress,Ingress
+personal access token,Personal Access Token
 playbook,Playbook
 pod,Pod
 web,Web
