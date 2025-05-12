@@ -226,9 +226,15 @@ def analyze_tmx(file_content, exclusion_pairs):
                     en_words_dict_case_insensitive[word.lower()] = word
                 
                 missing_words_case_insensitive = []
+                case_difference_words = []  # 大文字小文字だけが違う単語を格納
+                
                 for word in ja_eng_words:
-                    if word.lower() not in en_words_dict_case_insensitive:
+                    word_lower = word.lower()
+                    if word_lower not in en_words_dict_case_insensitive:
                         missing_words_case_insensitive.append(word)
+                    # 大文字小文字を無視すれば存在するが、区別すると存在しない単語を検出
+                    elif word not in en_words_dict_case_sensitive:
+                        case_difference_words.append(f"{en_words_dict_case_insensitive[word_lower]}/{word}")
                 
                 results.append({
                     "ID": idx,  # 翻訳ユニットごとの一意のID
@@ -237,8 +243,10 @@ def analyze_tmx(file_content, exclusion_pairs):
                     "日本語訳に含まれる英単語": ", ".join(ja_eng_words) if ja_eng_words else "なし",
                     "大/小文字区別": ", ".join(missing_words_case_sensitive) if missing_words_case_sensitive else "なし",
                     "大/小文字無視": ", ".join(missing_words_case_insensitive) if missing_words_case_insensitive else "なし",
+                    "大/小文字違い": ", ".join(case_difference_words) if case_difference_words else "なし",
                     "要確認(大/小文字区別)": len(missing_words_case_sensitive) > 0,
-                    "要確認(大/小文字無視)": len(missing_words_case_insensitive) > 0
+                    "要確認(大/小文字無視)": len(missing_words_case_insensitive) > 0,
+                    "要確認(大/小文字違い)": len(case_difference_words) > 0
                 })
         
         if excluded_count > 0:
@@ -269,12 +277,15 @@ if uploaded_file is not None:
         # 分析結果の概要
         case_sensitive_count = df["要確認(大/小文字区別)"].sum()
         case_insensitive_count = df["要確認(大/小文字無視)"].sum()
+        case_difference_count = df["要確認(大/小文字違い)"].sum()
         
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         with col1:
             st.metric("要確認セグメント数 (大/小文字区別)", f"{case_sensitive_count} / {len(df)}")
         with col2:
             st.metric("要確認セグメント数 (大/小文字無視)", f"{case_insensitive_count} / {len(df)}")
+        with col3:
+            st.metric("要確認セグメント数 (大/小文字違い)", f"{case_difference_count} / {len(df)}")
         
         # データフレームを表示
         st.subheader("分析結果")
@@ -282,8 +293,12 @@ if uploaded_file is not None:
         # 「要確認」のフィルタリングオプション
         filter_option = st.radio(
             "表示オプション:",
-            ["すべて表示", "要確認のみ(大/小文字区別)", "要確認のみ(大/小文字無視)", "いずれかの方法で要確認"],
-            index=3,  # 「いずれかの方法で要確認」がデフォルトで選択される
+            ["すべて表示", 
+             "要確認のみ(大/小文字区別)", 
+             "要確認のみ(大/小文字無視)", 
+             "要確認のみ(大/小文字違い)",
+             "いずれかの方法で要確認"],
+            index=4,  # 「いずれかの方法で要確認」がデフォルトで選択される
             horizontal=True
         )
         
@@ -292,8 +307,12 @@ if uploaded_file is not None:
             filtered_df = df[df["要確認(大/小文字区別)"] == True]
         elif filter_option == "要確認のみ(大/小文字無視)":
             filtered_df = df[df["要確認(大/小文字無視)"] == True]
+        elif filter_option == "要確認のみ(大/小文字違い)":
+            filtered_df = df[df["要確認(大/小文字違い)"] == True]
         elif filter_option == "いずれかの方法で要確認":
-            filtered_df = df[(df["要確認(大/小文字区別)"] == True) | (df["要確認(大/小文字無視)"] == True)]
+            filtered_df = df[(df["要確認(大/小文字区別)"] == True) | 
+                             (df["要確認(大/小文字無視)"] == True) | 
+                             (df["要確認(大/小文字違い)"] == True)]
         else:
             filtered_df = df
         
@@ -305,8 +324,10 @@ if uploaded_file is not None:
             columns_to_display = base_columns + ["大/小文字区別"]
         elif filter_option == "要確認のみ(大/小文字無視)":
             columns_to_display = base_columns + ["大/小文字無視"]
+        elif filter_option == "要確認のみ(大/小文字違い)":
+            columns_to_display = base_columns + ["大/小文字違い"]
         else:
-            columns_to_display = base_columns + ["大/小文字区別", "大/小文字無視"]
+            columns_to_display = base_columns + ["大/小文字区別", "大/小文字無視", "大/小文字違い"]
             
         # 表示用のデータフレームを作成（選択された列のみ）
         filtered_df = filtered_df[columns_to_display].copy()
@@ -372,7 +393,7 @@ if uploaded_file is not None:
                 if col == "ID":
                     html += f"<td class=\"index-column\">{cell_value}</td>"
                 # 「なし」という値は特別にスタイルを適用
-                elif col in ["大/小文字区別", "大/小文字無視"] and cell_value == "なし":
+                elif col in ["大/小文字区別", "大/小文字無視", "大/小文字違い"] and cell_value == "なし":
                     html += f"<td style='color: green;'>{cell_value}</td>"
                 else:
                     html += f"<td>{cell_value}</td>"
@@ -408,7 +429,8 @@ with st.expander("使い方"):
        - すべて表示：すべての翻訳セグメントを表示
        - 要確認のみ(大/小文字区別)：大文字小文字を区別して不一致がある行のみ表示（「大/小文字区別」列のみ表示）
        - 要確認のみ(大/小文字無視)：大文字小文字を無視して不一致がある行のみ表示（「大/小文字無視」列のみ表示）
-       - いずれかの方法で要確認：いずれかの方法で不一致がある行を表示（両方の列を表示）
+       - 要確認のみ(大/小文字違い)：大文字小文字のみが異なる単語がある行のみ表示（「大/小文字違い」列のみ表示）
+       - いずれかの方法で要確認：いずれかの方法で不一致がある行を表示（すべての列を表示）
     5. 分析結果はCSV形式でダウンロードできます
     
     ### 除外設定について
@@ -423,6 +445,7 @@ with st.expander("使い方"):
     
     - **大/小文字区別**：「Example」と「example」を別の単語として扱います
     - **大/小文字無視**：「Example」と「example」を同じ単語として扱います
+    - **大/小文字違い**：大文字小文字のみが異なる単語を検出します（例：原文に「example」があり訳文に「Example」がある場合）
     - 英単語の抽出は2文字以上の連続したアルファベットを基準としています
     - TMXファイルの構造が標準と異なる場合は、「デバッグ情報」を確認してください
     """)
