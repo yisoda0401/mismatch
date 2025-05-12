@@ -38,6 +38,8 @@ with st.expander("除外設定", expanded=False):
     
     # デフォルトの除外ペア設定に正規表現の例を追加
     default_exclusion_pairs = """r:\\b\\w+[^s]s\\b,r:\\b\\w+\\b
+bean,Bean
+cookie,Cookie
 egress,Egress
 ingress,Ingress
 personal access token,Personal Access Token
