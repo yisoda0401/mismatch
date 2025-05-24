@@ -17,7 +17,7 @@ uploaded_file = st.file_uploader("TMXファイルをアップロード", type=["
 with st.expander("除外設定", expanded=False):
     
     # デフォルトの除外ペア設定に正規表現の例を追加
-    default_exclusion_pairs = """r:\\b\\w+[^s]s\\b,r:\\b\\w+\\b
+    default_exclusion_pairs = """r:[A-Z][a-z]+,r:[A-Z][A-Z]+
 bean,Bean
 cookie,Cookie
 egress,Egress
@@ -257,30 +257,17 @@ def analyze_tmx(file_content, exclusion_pairs):
                         missing_words_case_insensitive.append(ja_word)
                     # 2. 大文字小文字無視で存在する場合、大文字小文字区別で存在しないか (case_difference_words)
                     elif ja_word not in en_words_dict_case_sensitive:
-                        # この時点で word_lower は en_words_dict_case_insensitive に存在する
-                        # en_words_dict_case_insensitive[word_lower] は原文の単語 (大文字小文字維持)
-                        # ja_word は訳文の単語 (大文字小文字維持)
                         case_difference_words.append(f"{en_words_dict_case_insensitive[word_lower]}/{ja_word}")
-                    
-                    # 3. 単複の違いのチェック (原文に完全一致せず、かつ大文字小文字違いでもない場合、またはそれらとは独立してチェック)
-                    #    原文に完全一致する単語が訳文にある場合は、単複の違いとして検出すべきではない。
-                    #    また、大文字小文字違いとして既に検出されている場合も、重複して単複の違いとしてリストアップする必要はないかもしれないが、
-                    #    ここでは独立してチェックし、ユーザーが判断できるようにする。
-                    #    test.py のロジック: ja_word が en_words_set_original (原文単語セット、大文字小文字区別) に完全一致しない場合に単複チェック
                     
                     is_exact_match_in_source = ja_word in en_words_set_original
                     
-                    if not is_exact_match_in_source: # 完全一致しない場合のみ単複チェック
+                    if not is_exact_match_in_source: 
                         found_sp_pair = False
-                        for en_word_orig_from_src in en_words_case_sensitive: # 原文の各単語と比較
+                        for en_word_orig_from_src in en_words_case_sensitive: 
                             if are_singular_plural_pair(ja_word, en_word_orig_from_src):
                                 singular_plural_differences.append(f"{en_word_orig_from_src}/{ja_word}")
                                 found_sp_pair = True
-                                break # この ja_word に対する単複ペアが見つかった
-                        # if found_sp_pair and ja_word in missing_words_case_insensitive:
-                            # もし単複ペアが見つかり、かつ「大文字小文字無視」でも見つからないリストに入っていたら、
-                            # それは純粋な単複違いの可能性が高いので、missing_words_case_insensitive から削除することも検討できる
-                            # ただし、複雑になるため、一旦は各リストを独立して作成する
+                                break 
                 
                 results.append({
                     "ID": idx,
@@ -289,10 +276,10 @@ def analyze_tmx(file_content, exclusion_pairs):
                     "日本語訳に含まれる英単語": ", ".join(ja_eng_words) if ja_eng_words else "なし",
                     "大/小文字無視": ", ".join(missing_words_case_insensitive) if missing_words_case_insensitive else "なし",
                     "大/小文字違い": ", ".join(case_difference_words) if case_difference_words else "なし",
-                    "単複の違い": ", ".join(singular_plural_differences) if singular_plural_differences else "なし", # 新しい列
+                    "単複の違い": ", ".join(singular_plural_differences) if singular_plural_differences else "なし", 
                     "要確認(大/小文字無視)": len(missing_words_case_insensitive) > 0,
                     "要確認(大/小文字違い)": len(case_difference_words) > 0,
-                    "要確認(単複の違い)": len(singular_plural_differences) > 0 # 新しいフラグ
+                    "要確認(単複の違い)": len(singular_plural_differences) > 0 
                 })
         
         if excluded_count > 0:
@@ -321,16 +308,16 @@ if uploaded_file is not None:
     if df is not None and not df.empty:
         # 分析結果の概要
         case_difference_count = df["要確認(大/小文字違い)"].sum()
-        case_insensitive_count = df["要確認(大/小文字無視)"].sum()
-        singular_plural_count = df["要確認(単複の違い)"].sum() # 新しいメトリック
+        singular_plural_count = df["要確認(単複の違い)"].sum() # 先に表示
+        case_insensitive_count = df["要確認(大/小文字無視)"].sum() # 後に表示
         
-        col1, col2, col3 = st.columns(3) # 3列に変更
+        col1, col2, col3 = st.columns(3)
         with col1: 
             st.metric("要確認 (大/小文字違い)", f"{case_difference_count} / {len(df)}")
-        with col2: 
-            st.metric("要確認 (大/小文字無視)", f"{case_insensitive_count} / {len(df)}")
-        with col3: # 新しいメトリック用
+        with col2: # 単複の違いを2番目に
             st.metric("要確認 (単複の違い)", f"{singular_plural_count} / {len(df)}")
+        with col3: # 大/小文字無視を3番目に
+            st.metric("要確認 (大/小文字無視)", f"{case_insensitive_count} / {len(df)}")
         
         st.subheader("分析結果")
         
@@ -338,24 +325,24 @@ if uploaded_file is not None:
             "表示オプション:",
             ["すべて表示", 
              "要確認のみ(大/小文字違い)",
-             "要確認のみ(大/小文字無視)",
-             "要確認のみ(単複の違い)", # 新しいオプション
+             "要確認のみ(単複の違い)",   # 順序変更
+             "要確認のみ(大/小文字無視)", # 順序変更
              "いずれかの方法で要確認"],
-            index=4,  # デフォルトを「いずれかの方法で要確認」に調整
+            index=4, 
             horizontal=True
         )
         
         if filter_option == "要確認のみ(大/小文字違い)":
             filtered_df = df[df["要確認(大/小文字違い)"] == True]
-        elif filter_option == "要確認のみ(大/小文字無視)":
-            filtered_df = df[df["要確認(大/小文字無視)"] == True]
-        elif filter_option == "要確認のみ(単複の違い)": # 新しいフィルター条件
+        elif filter_option == "要確認のみ(単複の違い)": # 順序変更
             filtered_df = df[df["要確認(単複の違い)"] == True]
+        elif filter_option == "要確認のみ(大/小文字無視)": # 順序変更
+            filtered_df = df[df["要確認(大/小文字無視)"] == True]
         elif filter_option == "いずれかの方法で要確認":
             filtered_df = df[
                              (df["要確認(大/小文字無視)"] == True) | 
                              (df["要確認(大/小文字違い)"] == True) |
-                             (df["要確認(単複の違い)"] == True) # 新しいフラグもチェック
+                             (df["要確認(単複の違い)"] == True) 
                             ]
         else: # すべて表示
             filtered_df = df
@@ -364,12 +351,12 @@ if uploaded_file is not None:
         
         if filter_option == "要確認のみ(大/小文字違い)":
             columns_to_display = base_columns + ["大/小文字違い"]
-        elif filter_option == "要確認のみ(大/小文字無視)":
-            columns_to_display = base_columns + ["大/小文字無視"]
-        elif filter_option == "要確認のみ(単複の違い)": # 新しいオプションの表示列
+        elif filter_option == "要確認のみ(単複の違い)": # 順序変更
             columns_to_display = base_columns + ["単複の違い"]
+        elif filter_option == "要確認のみ(大/小文字無視)": # 順序変更
+            columns_to_display = base_columns + ["大/小文字無視"]
         else: # すべて表示 または いずれかの方法で要確認
-            columns_to_display = base_columns + ["大/小文字違い", "大/小文字無視", "単複の違い"] # 新しい列も追加
+            columns_to_display = base_columns + ["大/小文字違い", "単複の違い", "大/小文字無視"] # 表示列の順序も合わせる
             
         if not filtered_df.empty: 
             filtered_df_display = filtered_df[columns_to_display].copy()
@@ -380,7 +367,7 @@ if uploaded_file is not None:
         <style>
             .styled-table { border-collapse: collapse; width: 100%; font-size: 14px; text-align: left; }
             .styled-table th { background-color: #f2f2f2; color: #333; font-weight: bold; padding: 10px 8px; border: 1px solid #ddd; }
-            .styled-table td { padding: 8px; border: 1px solid #ddd; word-wrap: break-word; max-width: 350px; } /* max-width調整 */
+            .styled-table td { padding: 8px; border: 1px solid #ddd; word-wrap: break-word; max-width: 350px; }
             .styled-table tr:nth-child(even) { background-color: #f9f9f9; }
             .styled-table tr:nth-child(odd) { background-color: #ffffff; }
             .styled-table tr:hover { background-color: #e6f7ff; }
@@ -422,7 +409,7 @@ if uploaded_file is not None:
     elif df is not None and df.empty: 
         st.info("分析対象の翻訳ペアが見つかりましたが、条件に一致する項目はありませんでした。")
     else: 
-        pass # エラーや翻訳ペアなしの場合は analyze_tmx 内でメッセージ表示
+        pass 
 else:
     st.info("TMXファイルをアップロードして分析を開始してください。")
 
@@ -433,20 +420,20 @@ with st.expander("使い方"):
     1. 上部の「Browse files」ボタンをクリックしてTMXファイルをアップロードします。
     2. 必要に応じて「除外設定」で除外する原語・訳語ペアを設定します。
     3. アプリが自動的にファイルを分析し、結果を表示します。
-    4. **分析結果の概要**: 各確認項目（大/小文字違い、大/小文字無視、単複の違い）について、要確認と判断されたセグメント数が表示されます。
+    4. **分析結果の概要**: 各確認項目（大/小文字違い、単複の違い、大/小文字無視）について、要確認と判断されたセグメント数が表示されます。
     5. **分析結果テーブル**:
         - **ID**: 翻訳ユニットの通し番号。
         - **英語原文**: TMXファイル内の英語原文。
         - **日本語訳**: TMXファイル内の日本語訳。
         - **日本語訳に含まれる英単語**: 日本語訳から抽出された英単語のリスト。
-        - **大/小文字無視**: 日本語訳中の英単語が、大文字・小文字を無視すると英語原文に存在しない場合に、その単語をリストアップします。
         - **大/小文字違い**: 日本語訳中の英単語が、大文字・小文字を区別すると英語原文に存在しないが、無視すると存在する場合に、原文の形と訳文の形を `原文/訳文` の形式でリストアップします (例: `Pod/pod`)。
         - **単複の違い**: 日本語訳中の英単語が、英語原文の単語と単数形・複数形のみ異なる場合（かつ完全一致ではない場合）に、そのペアを `原文の形/訳文の形` の形式でリストアップします (例: `book/books`)。
+        - **大/小文字無視**: 日本語訳中の英単語が、大文字・小文字を無視すると英語原文に存在しない場合に、その単語をリストアップします。
     6. **表示オプション**: テーブルに表示するセグメントをフィルタリングできます。
        - **すべて表示**: すべての翻訳セグメントと関連する分析結果列を表示します。
        - **要確認のみ(大/小文字違い)**: 「大/小文字違い」が検出されたセグメントのみを表示します。
-       - **要確認のみ(大/小文字無視)**: 「大/小文字無視」で単語がリストアップされたセグメントのみを表示します。
        - **要確認のみ(単複の違い)**: 「単複の違い」が検出されたセグメントのみを表示します。
+       - **要確認のみ(大/小文字無視)**: 「大/小文字無視」で単語がリストアップされたセグメントのみを表示します。
        - **いずれかの方法で要確認**: 上記のいずれかの「要確認」条件に合致するセグメントを表示します。
     7. 分析結果はCSV形式でダウンロードできます。
     
@@ -462,7 +449,7 @@ with st.expander("使い方"):
     - 正規表現を使用する場合は、パターンの前に `r:` を付けてください（例: `r:[A-Z][a-z]+,r:[A-Z][A-Z]+`）。
         - 正規表現では `\\` のように特殊文字をエスケープする必要があります。例えば、単語の境界を示す `\\b` や単語文字を示す `\\w` など。
     - 原語に指定した文字列（または正規表現パターン）が英語原文に含まれ、かつ訳語に指定した文字列（または正規表現パターン）が日本語訳に含まれる場合、そのセグメントは分析結果から除外されます。
-    - **注意**: `CPUs/CPU` などのペアはデフォルトの正規表現 `r:\\b\\w+[^s]s\\b,r:\\b\\w+\\b` で除外されます。
+    - **注意**: `CPUs/CPU` などのペアはデフォルトの正規表現 `r:[A-Z][a-z]+,r:[A-Z][A-Z]+` で除外されます。
     
     ### 英単語の抽出ルール
     - アルファベットが2文字以上連続するものを英単語として抽出します。
