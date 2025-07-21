@@ -9,14 +9,13 @@ ET.register_namespace('xml', 'http://www.w3.org/XML/1998/namespace')
 
 st.set_page_config(page_title="TMX分析ツール", layout="wide")
 st.title("TMX分析ツール")
-st.subheader("日本語訳に含まれる英単語が英語原文に存在するか確認・分析") # サブヘッダーを少し汎用的に
+st.subheader("日本語訳に含まれる英単語が英語原文に存在するか確認・分析")
 
 uploaded_file = st.file_uploader("TMXファイルをアップロード", type=["tmx"])
 
 # 除外ペアの入力エリア
 with st.expander("除外設定", expanded=False):
     
-    # デフォルトの除外ペア設定に正規表現の例を追加
     default_exclusion_pairs = """r:[A-Z][A-Z]+s,r:[A-Z][A-Z]+
 bean,Bean
 cookie,Cookie
@@ -54,10 +53,9 @@ manual page,man ページ"""
         st.info("除外ペアが設定されていません")
 
 def extract_english_words(text):
-    # 英単語を抽出（アルファベットが2文字以上連続するもの）
-    # 大文字小文字を区別して抽出
-    words = re.findall(r'\b[a-zA-Z]{2,}\b', text)
-    return words  # 大文字小文字を維持
+    # 英単語を抽出（アルファベットとアンダーバーが2文字以上連続するもの）
+    words = re.findall(r'\b[a-zA-Z_]{2,}\b', text)
+    return words
 
 def get_full_text_content(element):
     """要素内のすべてのテキストを再帰的に取得（タグを無視）"""
@@ -73,217 +71,172 @@ def get_full_text_content(element):
             
     return text
 
-def should_exclude(en_text, ja_text, exclusion_pairs):
-    """指定された除外ペアに基づいて、このセグメントを除外すべきかを判断"""
-    for source, target in exclusion_pairs:
-        # 正規表現パターンかどうかを確認
-        source_is_regex = source.startswith('r:')
-        target_is_regex = target.startswith('r:')
+def is_pair_excluded(source_word, target_word, exclusion_rules):
+    """指定された単語ペアが除外ルールに一致するかを判断"""
+    for source_rule, target_rule in exclusion_rules:
+        source_is_regex = source_rule.startswith('r:')
+        target_is_regex = target_rule.startswith('r:')
         
-        # 正規表現パターンの場合は先頭の 'r:' を削除
-        source_pattern = source[2:] if source_is_regex else source
-        target_pattern = target[2:] if target_is_regex else target
-        
-        # 条件チェック
-        source_match = False
-        target_match = False
+        source_pattern = source_rule[2:] if source_is_regex else re.escape(source_rule)
+        target_pattern = target_rule[2:] if target_is_regex else re.escape(target_rule)
         
         try:
-            if source_is_regex:
-                # 正規表現マッチングを実行
-                source_match = bool(re.search(source_pattern, en_text))
-            else:
-                # 通常の文字列検索
-                source_match = source in en_text
-                
-            if target_is_regex:
-                # 正規表現マッチングを実行
-                target_match = bool(re.search(target_pattern, ja_text))
-            else:
-                # 通常の文字列検索
-                target_match = target in ja_text
-                
-            # 両方マッチした場合は除外
+            # re.fullmatch を使い、単語全体がパターンに一致するかを確認
+            source_match = bool(re.fullmatch(source_pattern, source_word))
+            target_match = bool(re.fullmatch(target_pattern, target_word))
+            
             if source_match and target_match:
                 return True
         except re.error as e:
-            # 正規表現エラーを処理（ログに記録するなど）
-            st.warning(f"正規表現エラー: {str(e)} - パターン: '{source_pattern}' または '{target_pattern}'")
+            # UIにエラーを表示するのは冗長になる可能性があるため、ここではスキップ
+            # st.warning(f"正規表現エラー: {str(e)}")
             continue
-    
+            
     return False
 
 def are_singular_plural_pair(word1, word2):
-    """
-    2つの単語が単数形と複数形のペアであるか（大文字小文字を無視して）判定する。
-    word1 と word2 のどちらが単数形でも複数形でも対応。
-    """
+    """2つの単語が単数形と複数形のペアであるか（大文字小文字を無視して）判定する。"""
     w1_lower = word1.lower()
     w2_lower = word2.lower()
 
-    if w1_lower == w2_lower: # 全く同じ単語はペアとしない
+    if w1_lower == w2_lower:
         return False
 
-    # 不規則変化の基本的な対応 (辞書は必要に応じて拡張)
     irregular_map = {
         "child": "children", "man": "men", "woman": "women", "tooth": "teeth",
         "foot": "feet", "mouse": "mice", "goose": "geese", "ox": "oxen",
         "person": "people", "die": "dice", "corpus": "corpora", "focus": "foci",
         "datum": "data", "medium": "media", "analysis": "analyses", "basis": "bases",
         "criterion": "criteria", "phenomenon": "phenomena", "index": "indices", 
-        "thesis": "theses", "radius": "radii", "formula": "formulae", # "formulas" もあり得る
+        "thesis": "theses", "radius": "radii", "formula": "formulae",
         "shelf": "shelves", "leaf": "leaves", "knife": "knives", "life": "lives", "wolf": "wolves",
         "cactus": "cacti", "syllabus": "syllabi" 
     }
-    # 辞書の双方向チェック
     if irregular_map.get(w1_lower) == w2_lower or irregular_map.get(w2_lower) == w1_lower:
         return True
 
-    # 規則的な変化のチェック (w1が単数形、w2が複数形)
-    if w1_lower + 's' == w2_lower: return True
-    # -y -> -ies
-    if w1_lower.endswith('y') and len(w1_lower) > 1 and w1_lower[-2].lower() not in 'aeiou' and w1_lower[:-1] + 'ies' == w2_lower: return True
-    # -s, -x, -z, -ch, -sh, -o -> -es
-    if any(w1_lower.endswith(s) for s in ['s', 'x', 'z', 'ch', 'sh', 'o']) and w1_lower + 'es' == w2_lower: return True
-    # -f (but not -ff) -> -ves
-    if (w1_lower.endswith('f') and not w1_lower.endswith('ff')) and w1_lower[:-1] + 'ves' == w2_lower: return True 
-    # -fe -> -ves
-    if w1_lower.endswith('fe') and w1_lower[:-2] + 'ves' == w2_lower: return True
+    def check_regular(singular, plural):
+        if singular + 's' == plural: return True
+        if singular.endswith('y') and len(singular) > 1 and singular[-2].lower() not in 'aeiou' and singular[:-1] + 'ies' == plural: return True
+        if any(singular.endswith(s) for s in ['s', 'x', 'z', 'ch', 'sh', 'o']) and singular + 'es' == plural: return True
+        if (singular.endswith('f') and not singular.endswith('ff')) and singular[:-1] + 'ves' == plural: return True 
+        if singular.endswith('fe') and singular[:-2] + 'ves' == plural: return True
+        return False
 
-    # 規則的な変化のチェック (w2が単数形、w1が複数形)
-    if w2_lower + 's' == w1_lower: return True
-    # -y -> -ies
-    if w2_lower.endswith('y') and len(w2_lower) > 1 and w2_lower[-2].lower() not in 'aeiou' and w2_lower[:-1] + 'ies' == w1_lower: return True
-    # -s, -x, -z, -ch, -sh, -o -> -es
-    if any(w2_lower.endswith(s) for s in ['s', 'x', 'z', 'ch', 'sh', 'o']) and w2_lower + 'es' == w1_lower: return True
-    # -f (but not -ff) -> -ves
-    if (w2_lower.endswith('f') and not w2_lower.endswith('ff')) and w2_lower[:-1] + 'ves' == w1_lower: return True
-    # -fe -> -ves
-    if w2_lower.endswith('fe') and w2_lower[:-2] + 'ves' == w1_lower: return True
-    
-    return False
+    return check_regular(w1_lower, w2_lower) or check_regular(w2_lower, w1_lower)
 
 
 def analyze_tmx(file_content, exclusion_pairs):
     try:
-        # XMLパーサーでファイルを解析
         tree = ET.parse(io.BytesIO(file_content))
         root = tree.getroot()
         
-        # 名前空間を取得
         namespaces = dict([node for _, node in ET.iterparse(io.BytesIO(file_content), events=['start-ns'])])
         if not namespaces:
-            # 名前空間がない場合はデフォルト設定
             namespaces['xml'] = 'http://www.w3.org/XML/1998/namespace'
         
         results = []
-        excluded_count = 0
         
-        # TMXファイルの構造に基づいて翻訳ユニットを探す
         tus = root.findall(".//tu") or root.findall(".//{*}tu")
         
-        for idx, tu in enumerate(tus, 1):  # 1から始まるインデックスを付与
+        for idx, tu in enumerate(tus, 1):
             en_text = ""
             ja_text = ""
             
-            # 全てのsegタグを検索
             segs = tu.findall(".//seg") or tu.findall(".//{*}seg")
             
             for seg in segs:
-                # tuv要素（親要素）を取得
                 parent = None
                 for parent_elem in tu:
                     if seg in parent_elem.iter():
                         parent = parent_elem
                         break
                 
-                # xml:lang属性を確認
                 lang = None
-                
-                # 直接属性を確認
                 if parent is not None:
-                    # 通常の属性名でチェック
                     lang = parent.get("xml:lang") or parent.get("{http://www.w3.org/XML/1998/namespace}lang")
-                    
-                    # 属性が見つからない場合は全属性をチェック
                     if lang is None:
                         for attr_name, attr_value in parent.attrib.items():
                             if attr_name.endswith('lang'):
                                 lang = attr_value
                                 break
                 
-                # segタグ内のすべてのテキストを取得（子タグも含む）
                 text_content = get_full_text_content(seg)
                 
-                # 言語に基づいて適切な変数に格納
                 if lang == "en-us" or lang == "en":
                     en_text = text_content
                 elif lang == "ja" or lang == "ja-jp":
                     ja_text = text_content
             
-            if en_text and ja_text:  # 両方のテキストが存在する場合のみ処理
-                # 除外条件をチェック
-                if exclusion_pairs and should_exclude(en_text, ja_text, exclusion_pairs):
-                    excluded_count += 1
-                    continue  # このセグメントをスキップ
-                
-                # 英語セグメントから単語を抽出（大文字小文字を維持）
+            if en_text and ja_text:
                 en_words_case_sensitive = extract_english_words(en_text)
-                en_words_set_original = set(en_words_case_sensitive) # 高速なルックアップ用
+                en_words_set_original = set(en_words_case_sensitive)
                 
-                # 大文字小文字を区別した辞書を作成（出現形を保持） - 「大/小文字違い」の検出に必要
-                en_words_dict_case_sensitive = {}
-                for word in en_words_case_sensitive:
-                    en_words_dict_case_sensitive[word] = word
+                en_words_dict_case_sensitive = {word: word for word in en_words_case_sensitive}
+                en_words_dict_case_insensitive = {word.lower(): word for word in en_words_case_sensitive}
                 
-                # 日本語セグメントから英単語を抽出
                 ja_eng_words = extract_english_words(ja_text)
                 
-                # 大文字小文字を区別しない分析
-                # 小文字変換した辞書を作成
-                en_words_dict_case_insensitive = {}
-                for word in en_words_case_sensitive:
-                    en_words_dict_case_insensitive[word.lower()] = word # 元の単語を保持
-                
-                missing_words_case_insensitive = []
-                case_difference_words = []  # 大文字小文字だけが違う単語を格納
-                singular_plural_differences = [] # 単複の違いを格納
+                # --- 差異候補をまず全て検出 ---
+                potential_words_not_in_source = []
+                potential_case_diffs = []
+                potential_sp_diffs = []
+                potential_underscore_diffs = []
 
                 for ja_word in ja_eng_words:
                     word_lower = ja_word.lower()
-                    
-                    # 1. 大文字小文字無視で原文に存在するか (missing_words_case_insensitive)
+
+                    # アンダーバーを含む単語
+                    if '_' in ja_word:
+                        if word_lower in en_words_dict_case_insensitive:
+                            if ja_word not in en_words_dict_case_sensitive:
+                                potential_underscore_diffs.append((en_words_dict_case_insensitive[word_lower], ja_word))
+                        else:
+                            potential_underscore_diffs.append(("-", ja_word))
+                        continue
+
+                    # アンダーバーを含まない単語
                     if word_lower not in en_words_dict_case_insensitive:
-                        missing_words_case_insensitive.append(ja_word)
-                    # 2. 大文字小文字無視で存在する場合、大文字小文字区別で存在しないか (case_difference_words)
+                        is_sp_pair = False
+                        for en_word in en_words_case_sensitive:
+                            if are_singular_plural_pair(ja_word, en_word):
+                                potential_sp_diffs.append((en_word, ja_word))
+                                is_sp_pair = True
+                                break
+                        if not is_sp_pair:
+                            potential_words_not_in_source.append(ja_word)
                     elif ja_word not in en_words_dict_case_sensitive:
-                        case_difference_words.append(f"{en_words_dict_case_insensitive[word_lower]}/{ja_word}")
-                    
-                    is_exact_match_in_source = ja_word in en_words_set_original
-                    
-                    if not is_exact_match_in_source: 
-                        found_sp_pair = False
-                        for en_word_orig_from_src in en_words_case_sensitive: 
-                            if are_singular_plural_pair(ja_word, en_word_orig_from_src):
-                                singular_plural_differences.append(f"{en_word_orig_from_src}/{ja_word}")
-                                found_sp_pair = True
-                                break 
+                        potential_case_diffs.append((en_words_dict_case_insensitive[word_lower], ja_word))
+
+                    if ja_word not in en_words_set_original:
+                        is_already_sp_pair = any(p[1] == ja_word for p in potential_sp_diffs)
+                        if not is_already_sp_pair:
+                            for en_word_orig in en_words_case_sensitive:
+                                if are_singular_plural_pair(ja_word, en_word_orig):
+                                    potential_sp_diffs.append((en_word_orig, ja_word))
+                                    break
+                
+                # --- 除外ルールを適用して最終的な差異リストを作成 ---
+                final_case_diffs = [f"{s}/{t}" for s, t in potential_case_diffs if not is_pair_excluded(s, t, exclusion_pairs)]
+                final_sp_diffs = list(set([f"{s}/{t}" for s, t in potential_sp_diffs if not is_pair_excluded(s, t, exclusion_pairs)]))
+                final_underscore_diffs = [f"{s}/{t}" for s, t in potential_underscore_diffs if not is_pair_excluded(s, t, exclusion_pairs)]
+                
+                # 「原文にない単語」はペアではないため、除外ロジックは適用しない
+                final_words_not_in_source = [f"-/{w}" for w in potential_words_not_in_source]
                 
                 results.append({
                     "ID": idx,
                     "英語原文": en_text,
                     "日本語訳": ja_text,
-                    "日本語訳に含まれる英単語": ", ".join(ja_eng_words) if ja_eng_words else "なし",
-                    "大/小文字無視": ", ".join(missing_words_case_insensitive) if missing_words_case_insensitive else "なし",
-                    "大/小文字違い": ", ".join(case_difference_words) if case_difference_words else "なし",
-                    "単複の違い": ", ".join(singular_plural_differences) if singular_plural_differences else "なし", 
-                    "要確認(大/小文字無視)": len(missing_words_case_insensitive) > 0,
-                    "要確認(大/小文字違い)": len(case_difference_words) > 0,
-                    "要確認(単複の違い)": len(singular_plural_differences) > 0 
+                    "大/小文字違い": ", ".join(final_case_diffs) if final_case_diffs else "なし",
+                    "単複の違い": ", ".join(final_sp_diffs) if final_sp_diffs else "なし", 
+                    "原文にない単語": ", ".join(final_words_not_in_source) if final_words_not_in_source else "なし",
+                    "アンダーバー違い": ", ".join(final_underscore_diffs) if final_underscore_diffs else "なし",
+                    "要確認(大/小文字違い)": len(final_case_diffs) > 0,
+                    "要確認(単複の違い)": len(final_sp_diffs) > 0,
+                    "要確認(原文にない単語)": len(final_words_not_in_source) > 0,
+                    "要確認(アンダーバー違い)": len(final_underscore_diffs) > 0
                 })
-        
-        if excluded_count > 0:
-            st.info(f"除外条件に一致したセグメント数: {excluded_count}")
         
         if not results:
             st.warning("翻訳ペアが見つかりませんでした。TMXファイルの構造を確認してください。")
@@ -306,57 +259,65 @@ if uploaded_file is not None:
         df = analyze_tmx(file_content, exclusion_pairs)
     
     if df is not None and not df.empty:
-        # 分析結果の概要
         case_difference_count = df["要確認(大/小文字違い)"].sum()
-        singular_plural_count = df["要確認(単複の違い)"].sum() # 先に表示
-        case_insensitive_count = df["要確認(大/小文字無視)"].sum() # 後に表示
+        singular_plural_count = df["要確認(単複の違い)"].sum()
+        not_in_source_count = df["要確認(原文にない単語)"].sum()
+        underscore_count = df["要確認(アンダーバー違い)"].sum()
         
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         with col1: 
             st.metric("要確認 (大/小文字違い)", f"{case_difference_count} / {len(df)}")
-        with col2: # 単複の違いを2番目に
+        with col2:
             st.metric("要確認 (単複の違い)", f"{singular_plural_count} / {len(df)}")
-        with col3: # 大/小文字無視を3番目に
-            st.metric("要確認 (大/小文字無視)", f"{case_insensitive_count} / {len(df)}")
+        with col3:
+            st.metric("要確認 (原文にない単語)", f"{not_in_source_count} / {len(df)}")
+        with col4:
+            st.metric("要確認 (アンダーバー違い)", f"{underscore_count} / {len(df)}")
         
         st.subheader("分析結果")
         
         filter_option = st.radio(
             "表示オプション:",
             ["すべて表示", 
-             "要確認のみ(大/小文字違い)",
-             "要確認のみ(単複の違い)",   # 順序変更
-             "要確認のみ(大/小文字無視)", # 順序変更
+             "大/小文字違い",
+             "単複の違い",
+             "原文にない単語",
+             "アンダーバー違い",
              "いずれかの方法で要確認"],
-            index=4, 
+            index=5, 
             horizontal=True
         )
         
-        if filter_option == "要確認のみ(大/小文字違い)":
+        if filter_option == "大/小文字違い":
             filtered_df = df[df["要確認(大/小文字違い)"] == True]
-        elif filter_option == "要確認のみ(単複の違い)": # 順序変更
+        elif filter_option == "単複の違い":
             filtered_df = df[df["要確認(単複の違い)"] == True]
-        elif filter_option == "要確認のみ(大/小文字無視)": # 順序変更
-            filtered_df = df[df["要確認(大/小文字無視)"] == True]
+        elif filter_option == "原文にない単語":
+            filtered_df = df[df["要確認(原文にない単語)"] == True]
+        elif filter_option == "アンダーバー違い":
+            filtered_df = df[df["要確認(アンダーバー違い)"] == True]
         elif filter_option == "いずれかの方法で要確認":
             filtered_df = df[
-                             (df["要確認(大/小文字無視)"] == True) | 
+                             (df["要確認(原文にない単語)"] == True) | 
                              (df["要確認(大/小文字違い)"] == True) |
-                             (df["要確認(単複の違い)"] == True) 
+                             (df["要確認(単複の違い)"] == True) |
+                             (df["要確認(アンダーバー違い)"] == True)
                             ]
-        else: # すべて表示
+        else:
             filtered_df = df
         
         base_columns = ["ID", "英語原文", "日本語訳"]
         
-        if filter_option == "要確認のみ(大/小文字違い)":
+        if filter_option == "大/小文字違い":
             columns_to_display = base_columns + ["大/小文字違い"]
-        elif filter_option == "要確認のみ(単複の違い)": # 順序変更
+        elif filter_option == "単複の違い":
             columns_to_display = base_columns + ["単複の違い"]
-        elif filter_option == "要確認のみ(大/小文字無視)": # 順序変更
-            columns_to_display = base_columns + ["大/小文字無視"]
-        else: # すべて表示 または いずれかの方法で要確認
-            columns_to_display = base_columns + ["大/小文字違い", "単複の違い", "大/小文字無視"] # 表示列の順序も合わせる
+        elif filter_option == "原文にない単語":
+            columns_to_display = base_columns + ["原文にない単語"]
+        elif filter_option == "アンダーバー違い":
+            columns_to_display = base_columns + ["アンダーバー違い"]
+        else:
+            columns_to_display = base_columns + ["大/小文字違い", "単複の違い", "原文にない単語", "アンダーバー違い"]
             
         if not filtered_df.empty: 
             filtered_df_display = filtered_df[columns_to_display].copy()
@@ -385,7 +346,7 @@ if uploaded_file is not None:
                 for col_name in filtered_df_display.columns:
                     cell_value = str(row[col_name]) 
                     cell_class = "index-column" if col_name == "ID" else ""
-                    if cell_value == "なし" and col_name in ["大/小文字無視", "大/小文字違い", "単複の違い"]: 
+                    if cell_value == "なし" and col_name in ["原文にない単語", "大/小文字違い", "単複の違い", "アンダーバー違い"]: 
                         html += f"<td class='{cell_class.strip()}' style='color: green;'>{cell_value}</td>"
                     else:
                         html += f"<td class='{cell_class.strip()}'>{cell_value}</td>"
@@ -420,38 +381,29 @@ with st.expander("使い方"):
     1. 上部の「Browse files」ボタンをクリックしてTMXファイルをアップロードします。
     2. 必要に応じて「除外設定」で除外する原語・訳語ペアを設定します。
     3. アプリが自動的にファイルを分析し、結果を表示します。
-    4. **分析結果の概要**: 各確認項目（大/小文字違い、単複の違い、大/小文字無視）について、要確認と判断されたセグメント数が表示されます。
+    4. **分析結果の概要**: 各確認項目について、要確認と判断されたセグメント数が表示されます。
     5. **分析結果テーブル**:
         - **ID**: 翻訳ユニットの通し番号。
         - **英語原文**: TMXファイル内の英語原文。
         - **日本語訳**: TMXファイル内の日本語訳。
-        - **日本語訳に含まれる英単語**: 日本語訳から抽出された英単語のリスト。
-        - **大/小文字違い**: 日本語訳中の英単語が、大文字・小文字を区別すると英語原文に存在しないが、無視すると存在する場合に、原文の形と訳文の形を `原文/訳文` の形式でリストアップします (例: `Pod/pod`)。
-        - **単複の違い**: 日本語訳中の英単語が、英語原文の単語と単数形・複数形のみ異なる場合（かつ完全一致ではない場合）に、そのペアを `原文の形/訳文の形` の形式でリストアップします (例: `book/books`)。
-        - **大/小文字無視**: 日本語訳中の英単語が、大文字・小文字を無視すると英語原文に存在しない場合に、その単語をリストアップします。
+        - **大/小文字違い**: 日本語訳中の英単語（アンダースコアを含まない）が、大文字・小文字を区別すると英語原文に存在しないが、無視すると存在する場合に、そのペアをリストアップします (例: `Pod/pod`)。
+        - **単複の違い**: 日本語訳中の英単語（アンダースコアを含まない）が、英語原文の単語と単数形・複数形のみ異なる場合に、そのペアをリストアップします (例: `book/books`)。
+        - **原文にない単語**: 日本語訳中の英単語（アンダースコアを含まない）が、大文字・小文字を無視しても英語原文に存在しない場合に、`- / 訳文の単語` の形式でリストアップします (例: `-/word`)。
+        - **アンダーバー違い**: アンダースコアを含む単語の差異を `原文/訳文` 形式でリストアップします (例: `MY_VAR/my_var`, `-/new_var`)。
     6. **表示オプション**: テーブルに表示するセグメントをフィルタリングできます。
-       - **すべて表示**: すべての翻訳セグメントと関連する分析結果列を表示します。
-       - **要確認のみ(大/小文字違い)**: 「大/小文字違い」が検出されたセグメントのみを表示します。
-       - **要確認のみ(単複の違い)**: 「単複の違い」が検出されたセグメントのみを表示します。
-       - **要確認のみ(大/小文字無視)**: 「大/小文字無視」で単語がリストアップされたセグメントのみを表示します。
-       - **いずれかの方法で要確認**: 上記のいずれかの「要確認」条件に合致するセグメントを表示します。
     7. 分析結果はCSV形式でダウンロードできます。
     
     ### 「要確認」の判断基準
-    - **要確認(大/小文字無視)**: 「大/小文字無視」列に単語が1つ以上リストアップされた場合。
-    - **要確認(大/小文字違い)**: 「大/小文字違い」列にペアが1つ以上リストアップされた場合。
-    - **要確認(単複の違い)**: 「単複の違い」列にペアが1つ以上リストアップされた場合。
+    - 各「要確認」列にペアが1つ以上リストアップされた場合に、それぞれのフラグが立ちます。
 
     ### 除外設定について
     
-    「除外設定」では、特定の原語・訳語ペアを検出対象から除外できます。
-    - 各行に「原語,訳語」の形式で入力します（例: `web,Web`）。
-    - 正規表現を使用する場合は、パターンの前に `r:` を付けてください（例: `r:\b\w+[^s]s\b,r:\b\w+\b`）。
-        - 正規表現では `\\` のように特殊文字をエスケープする必要があります。例えば、単語の境界を示す `\\b` や単語文字を示す `\\w` など。
-    - 原語に指定した文字列（または正規表現パターン）が英語原文に含まれ、かつ訳語に指定した文字列（または正規表現パターン）が日本語訳に含まれる場合、そのセグメントは分析結果から除外されます。
-    - **注意**: `CPUs/CPU` などのペアはデフォルトの正規表現 `r:[A-Z][A-Z]+s,r:[A-Z][A-Z]+` で除外されます。
+    「除外設定」では、特定の**差異ペア**を検出対象から除外できます。
+    - 各行に「原語,訳語」の形式で入力します（例: `CPUs,CPU`）。
+    - この設定は、検出された個々の差異ペア（例: `CPUs/CPU`）に適用されます。設定に一致したペアは、分析結果に表示されなくなります。
+    - **以前のバージョンとの違い**: この除外設定はセグメント全体ではなく、個別の単語ペアにのみ影響します。そのため、セグメント内に除外したい差異と報告してほしい差異が混在していても、正しく処理されます。
+    - 正規表現を使用する場合は、パターンの前に `r:` を付けてください（例: `r:[A-Z]+s,r:[A-Z]+`）。
     
     ### 英単語の抽出ルール
-    - アルファベットが2文字以上連続するものを英単語として抽出します。
-    - TMXファイルの構造が標準と異なる場合は、「TMXファイル構造（デバッグ）」を確認してください。
+    - アルファベットとアンダーバーが2文字以上連続するものを英単語として抽出します。
     """)
