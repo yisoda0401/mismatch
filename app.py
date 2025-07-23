@@ -74,6 +74,10 @@ def get_full_text_content(element):
 def is_pair_excluded(source_word, target_word, exclusion_rules):
     """指定された単語ペアが除外ルールに一致するかを判断"""
     for source_rule, target_rule in exclusion_rules:
+        # この関数は単語のみを扱うため、スペースを含むルールは無視
+        if ' ' in source_rule or ' ' in target_rule:
+            continue
+
         source_is_regex = source_rule.startswith('r:')
         target_is_regex = target_rule.startswith('r:')
         
@@ -88,8 +92,6 @@ def is_pair_excluded(source_word, target_word, exclusion_rules):
             if source_match and target_match:
                 return True
         except re.error as e:
-            # UIにエラーを表示するのは冗長になる可能性があるため、ここではスキップ
-            # st.warning(f"正規表現エラー: {str(e)}")
             continue
             
     return False
@@ -137,11 +139,15 @@ def analyze_tmx(file_content, exclusion_pairs):
         
         results = []
         
+        # 除外ルールをフレーズ用と単語用に分割
+        phrase_rules = [p for p in exclusion_pairs if ' ' in p[0] or ' ' in p[1]]
+        word_rules = [p for p in exclusion_pairs if ' ' not in p[0] and ' ' not in p[1]]
+
         tus = root.findall(".//tu") or root.findall(".//{*}tu")
         
         for idx, tu in enumerate(tus, 1):
-            en_text = ""
-            ja_text = ""
+            en_text_orig = ""
+            ja_text_orig = ""
             
             segs = tu.findall(".//seg") or tu.findall(".//{*}seg")
             
@@ -164,20 +170,35 @@ def analyze_tmx(file_content, exclusion_pairs):
                 text_content = get_full_text_content(seg)
                 
                 if lang == "en-us" or lang == "en":
-                    en_text = text_content
+                    en_text_orig = text_content
                 elif lang == "ja" or lang == "ja-jp":
-                    ja_text = text_content
+                    ja_text_orig = text_content
             
-            if en_text and ja_text:
-                en_words_case_sensitive = extract_english_words(en_text)
+            if en_text_orig and ja_text_orig:
+                # 分析用のテキストをコピー
+                en_text_analyzable = en_text_orig
+                ja_text_analyzable = ja_text_orig
+
+                # 1. フレーズの除外処理（マスキング）
+                for src_phrase, tgt_phrase in phrase_rules:
+                    # 現状、フレーズの正規表現はサポートしない
+                    if src_phrase.startswith('r:') or tgt_phrase.startswith('r:'):
+                        continue
+                    
+                    # フレーズが原文と訳文の両方に存在する場合、分析対象から削除
+                    if src_phrase in en_text_analyzable and tgt_phrase in ja_text_analyzable:
+                        en_text_analyzable = en_text_analyzable.replace(src_phrase, '')
+                        ja_text_analyzable = ja_text_analyzable.replace(tgt_phrase, '')
+
+                # 2. 単語ごとの分析
+                en_words_case_sensitive = extract_english_words(en_text_analyzable)
                 en_words_set_original = set(en_words_case_sensitive)
                 
                 en_words_dict_case_sensitive = {word: word for word in en_words_case_sensitive}
                 en_words_dict_case_insensitive = {word.lower(): word for word in en_words_case_sensitive}
                 
-                ja_eng_words = extract_english_words(ja_text)
+                ja_eng_words = extract_english_words(ja_text_analyzable)
                 
-                # --- 差異候補をまず全て検出 ---
                 potential_words_not_in_source = []
                 potential_case_diffs = []
                 potential_sp_diffs = []
@@ -186,7 +207,6 @@ def analyze_tmx(file_content, exclusion_pairs):
                 for ja_word in ja_eng_words:
                     word_lower = ja_word.lower()
 
-                    # アンダーバーを含む単語
                     if '_' in ja_word:
                         if word_lower in en_words_dict_case_insensitive:
                             if ja_word not in en_words_dict_case_sensitive:
@@ -195,7 +215,6 @@ def analyze_tmx(file_content, exclusion_pairs):
                             potential_underscore_diffs.append(("-", ja_word))
                         continue
 
-                    # アンダーバーを含まない単語
                     if word_lower not in en_words_dict_case_insensitive:
                         is_sp_pair = False
                         for en_word in en_words_case_sensitive:
@@ -216,18 +235,16 @@ def analyze_tmx(file_content, exclusion_pairs):
                                     potential_sp_diffs.append((en_word_orig, ja_word))
                                     break
                 
-                # --- 除外ルールを適用して最終的な差異リストを作成 ---
-                final_case_diffs = [f"{s}/{t}" for s, t in potential_case_diffs if not is_pair_excluded(s, t, exclusion_pairs)]
-                final_sp_diffs = list(set([f"{s}/{t}" for s, t in potential_sp_diffs if not is_pair_excluded(s, t, exclusion_pairs)]))
-                final_underscore_diffs = [f"{s}/{t}" for s, t in potential_underscore_diffs if not is_pair_excluded(s, t, exclusion_pairs)]
-                
-                # 「原文にない単語」はペアではないため、除外ロジックは適用しない
+                # 3. 単語の除外ルールを適用
+                final_case_diffs = [f"{s}/{t}" for s, t in potential_case_diffs if not is_pair_excluded(s, t, word_rules)]
+                final_sp_diffs = list(set([f"{s}/{t}" for s, t in potential_sp_diffs if not is_pair_excluded(s, t, word_rules)]))
+                final_underscore_diffs = [f"{s}/{t}" for s, t in potential_underscore_diffs if not is_pair_excluded(s, t, word_rules)]
                 final_words_not_in_source = [f"-/{w}" for w in potential_words_not_in_source]
                 
                 results.append({
                     "ID": idx,
-                    "英語原文": en_text,
-                    "日本語訳": ja_text,
+                    "英語原文": en_text_orig,
+                    "日本語訳": ja_text_orig,
                     "大/小文字違い": ", ".join(final_case_diffs) if final_case_diffs else "なし",
                     "単複の違い": ", ".join(final_sp_diffs) if final_sp_diffs else "なし", 
                     "原文にない単語": ", ".join(final_words_not_in_source) if final_words_not_in_source else "なし",
@@ -398,11 +415,17 @@ with st.expander("使い方"):
 
     ### 除外設定について
     
-    「除外設定」では、特定の**差異ペア**を検出対象から除外できます。
-    - 各行に「原語,訳語」の形式で入力します（例: `CPUs,CPU`）。
-    - この設定は、検出された個々の差異ペア（例: `CPUs/CPU`）に適用されます。設定に一致したペアは、分析結果に表示されなくなります。
-    - **以前のバージョンとの違い**: この除外設定はセグメント全体ではなく、個別の単語ペアにのみ影響します。そのため、セグメント内に除外したい差異と報告してほしい差異が混在していても、正しく処理されます。
-    - 正規表現を使用する場合は、パターンの前に `r:` を付けてください（例: `r:[A-Z]+s,r:[A-Z]+`）。
+    「除外設定」では、特定の差異ペアを検出対象から除外できます。除外設定は2段階で適用されます。
+    
+    1.  **フレーズの除外**:
+        - 設定にスペースを含むルール（例: `personal access token,Personal Access Token`）は「フレーズ」として扱われます。
+        - 分析の最初に、原文と訳文の両方に一致するフレーズが存在する場合、そのフレーズは後続の単語分析の対象から除外されます。
+        - (注: 現在、フレーズの除外に正規表現は使用できません)
+        
+    2.  **単語の除外**:
+        - フレーズ除外後、残ったテキストに対して単語ごとの差異が検出されます。
+        - スペースを含まないルール（例: `CPUs,CPU`）は、検出された個々の単語ペアに適用され、一致したものが結果から除外されます。
+        - 単語の除外では正規表現が使用できます（例: `r:[A-Z]+s,r:[A-Z]+`）。
     
     ### 英単語の抽出ルール
     - アルファベットとアンダーバーが2文字以上連続するものを英単語として抽出します。
