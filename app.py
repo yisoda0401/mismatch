@@ -25,6 +25,8 @@ personal access token,Personal Access Token
 playbook,Playbook
 pod,Pod
 web,Web
+website,Web サイト
+websites,Web サイト
 We,Red Hat
 vCPU,仮想 CPU
 VIP,仮想 IP
