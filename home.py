@@ -22,16 +22,9 @@ bean,Bean
 cookie,Cookie
 egress,Egress
 ingress,Ingress
-personal access token,Personal Access Token
 playbook,Playbook
 pod,Pod
-web,Web
-website,Web サイト
-websites,Web サイト
-We,Red Hat
-vCPU,仮想 CPU
-VIP,仮想 IP
-manual page,man ページ"""
+web,Web"""
     
     exclusion_pairs_text = st.text_area(
         "除外ペア (各行に「原語,訳語」の形式で入力。詳細は「使い方」を参照)",
