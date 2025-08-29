@@ -43,7 +43,7 @@ manual page,man ページ"""
     st.markdown("---") # 区切り線
 
     default_not_in_source_exclusions = """Red Hat
-Wi-Fi"""
+"""
 
     not_in_source_exclusions_text = st.text_area(
         "「原文にない単語」から除外するリスト（1行に1つ入力）",

@@ -11,14 +11,16 @@ DEFAULT_GLOSSARY_CSV = """Source,Target
 deploy,展開
 evict,削除
 extract,デプロイメント
+inject,挿入
+metric,メトリック
+overridden,上書き
+override,上書き
+overriding,上書き
+secure,安全
 unpack,デプロイメント
 unzip,デプロイメント
-metric,メトリック
-secure,安全
-inject,挿入
-override,上書き
-overridden,上書き
-overriding,上書き
+configure,設定を設定
+setting,設定を設定
 """
 
 def highlight_text(text, term):
@@ -125,10 +127,10 @@ def main():
     }
     /* ★変更点: 1列目と2列目の幅を指定 */
     th:nth-child(1), td:nth-child(1) {
-        width: 15%;
+        width: 12%;
     }
     th:nth-child(2), td:nth-child(2) {
-        width: 15%;
+        width: 12%;
     }
     tr:nth-child(even) {
         background-color: #fafafa;
@@ -153,7 +155,8 @@ def main():
     if glossary_option == 'デフォルトの用語集':
         glossary_df = pd.read_csv(io.StringIO(DEFAULT_GLOSSARY_CSV))
         st.sidebar.write("使用中のデフォルト用語集:")
-        st.sidebar.dataframe(glossary_df, use_container_width=True)
+        st.sidebar.dataframe(glossary_df, hide_index=True, use_container_width=True)
+        st.sidebar.write("追加する場合はこちら: https://docs.google.com/spreadsheets/d/1agQiUYggMyPxCyJlG7pCbBxCdYyhBUNTbPC-RSL4MuE/edit?gid=0#gid=0")
     else:
         glossary_file = st.sidebar.file_uploader(
             "用語集ファイル（CSV）をアップロード",
@@ -174,8 +177,8 @@ def main():
                 glossary_df = None
 
     # --- メイン画面 ---
-    st.markdown("---")
-    st.header("TMXファイルをアップロード")
+    # st.markdown("---")
+    # st.header("TMXファイルをアップロード")
     tmx_file = st.file_uploader("チェック対象のTMXファイルを選択してください", type=['tmx'], label_visibility="collapsed")
     
     if tmx_file is not None:
