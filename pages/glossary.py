@@ -4,30 +4,6 @@ from translate.storage import tmx
 import io
 import re # ハイライト処理のために正規表現ライブラリをインポート
 
-# --- デフォルト用語集 ---
-# アプリケーションに内蔵されているサンプル用語集です。
-# 形式: "Source,Target" のCSV形式文字列
-DEFAULT_GLOSSARY_CSV = """Source,Target
-deploy,展開
-evict,削除
-extract,デプロイメント
-inject,挿入
-metric,メトリック
-overridden,上書き
-override,上書き
-overriding,上書き
-secure,安全
-unpack,デプロイメント
-unzip,デプロイメント
-configure,設定を設定
-configure,設定の設定
-setting,設定を設定
-setting,設定の設定
-quer,クエリーし
-quer,クエリーす
-quer,クエリーせ
-"""
-
 def highlight_text(text, term):
     """
     テキスト内の指定された用語（大文字・小文字を区別しない）をハイライトする関数。
@@ -52,14 +28,14 @@ def highlight_text(text, term):
     )
     return highlighted_text
 
-def perform_check(tmx_file_content, glossary_df):
+def perform_check(tmx_file_content, glossary_data, check_mode):
     """
-    TMXファイルの内容をスキャンし、用語集の用語がソースとターゲットの両方に存在する場合を検出し、
-    その用語をハイライトする関数。
+    TMXファイルの内容をスキャンし、指定されたモードに応じて用語を検出・ハイライトする関数。
 
     Args:
         tmx_file_content (bytes): アップロードされたTMXファイルのバイトデータ。
-        glossary_df (pd.DataFrame): ソースとターゲットの用語を含むDataFrame。
+        glossary_data (pd.DataFrame or list): 用語集データ（DataFrameまたはリスト）。
+        check_mode (str): 'ペアチェック（原文と訳文）' または '訳文のみチェック'。
 
     Returns:
         pd.DataFrame: 検出された用語使用箇所の情報を含むDataFrame。セグメントはハイライト済み。
@@ -79,27 +55,45 @@ def perform_check(tmx_file_content, glossary_df):
         if not source_segment or not target_segment:
             continue
         
-        for _, row in glossary_df.iterrows():
-            source_term = str(row['Source']).strip()
-            target_term = str(row['Target']).strip()
+        # チェックモードに応じて処理を分岐
+        if check_mode == 'ペアチェック（原文と訳文）':
+            for _, row in glossary_data.iterrows():
+                source_term = str(row['Source']).strip()
+                target_term = str(row['Target']).strip()
 
-            if not source_term or not target_term:
-                continue
+                if not source_term or not target_term:
+                    continue
 
-            source_term_found = source_term.lower() in source_segment.lower()
-            target_term_found = target_term.lower() in target_segment.lower()
+                source_term_found = source_term.lower() in source_segment.lower()
+                target_term_found = target_term.lower() in target_segment.lower()
 
-            if source_term_found and target_term_found:
-                # マッチした用語をハイライトする
-                highlighted_source = highlight_text(source_segment, source_term)
-                highlighted_target = highlight_text(target_segment, target_term)
-                
-                found_segments.append({
-                    "原文用語": source_term,
-                    "訳文用語": target_term,
-                    "原文": highlighted_source,
-                    "訳文": highlighted_target
-                })
+                if source_term_found and target_term_found:
+                    highlighted_source = highlight_text(source_segment, source_term)
+                    highlighted_target = highlight_text(target_segment, target_term)
+                    
+                    found_segments.append({
+                        "原文用語": source_term,
+                        "訳文用語": target_term,
+                        "原文": highlighted_source,
+                        "訳文": highlighted_target
+                    })
+        
+        elif check_mode == '訳文のみチェック':
+            for term in glossary_data:
+                target_term = term.strip()
+                if not target_term:
+                    continue
+
+                if target_term.lower() in target_segment.lower():
+                    highlighted_target = highlight_text(target_segment, target_term)
+                    
+                    found_segments.append({
+                        "原文用語": "ー", # 訳文のみチェックのため該当なし
+                        "訳文用語": target_term,
+                        "原文": source_segment, # ハイライトなし
+                        "訳文": highlighted_target
+                    })
+
 
     return pd.DataFrame(found_segments)
 
@@ -108,8 +102,8 @@ def main():
     StreamlitアプリケーションのメインUIとロジック。
     """
     st.set_page_config(layout="wide")
-    st.title("TMX禁止用語チェッカー")
-    st.markdown("TMXファイルをアップロードすると、自動的に用語集との照合が開始します。")
+    st.title("TMX用語チェッカー")
+    st.markdown("サイドバーでチェックモードと用語集を設定し、TMXファイルをアップロードしてください。")
 
     # 結果表示テーブルの見た目を整えるためのCSS
     st.markdown("""
@@ -130,7 +124,6 @@ def main():
         background-color: #f2f2f2;
         text-align: left;
     }
-    /* ★変更点: 1列目と2列目の幅を指定 */
     th:nth-child(1), td:nth-child(1) {
         width: 12%;
     }
@@ -150,60 +143,108 @@ def main():
     """, unsafe_allow_html=True)
 
     # --- サイドバー (用語集設定) ---
-    st.sidebar.header("禁止用語の設定")
-    glossary_option = st.sidebar.radio(
-        "1. 使用する用語集を選択してください",
-        ('デフォルトの用語集', 'CSVファイルをアップロード')
+    st.sidebar.header("設定")
+    check_mode = st.sidebar.radio(
+        "チェックモードを選択",
+        ('ペアチェック（原文と訳文）', '訳文のみチェック'),
+        key="check_mode"
     )
 
-    glossary_df = None
-    if glossary_option == 'デフォルトの用語集':
-        glossary_df = pd.read_csv(io.StringIO(DEFAULT_GLOSSARY_CSV))
-        st.sidebar.write("使用中のデフォルト用語集:")
-        st.sidebar.dataframe(glossary_df, hide_index=True, use_container_width=True)
-        st.sidebar.write("追加する場合はこちら: https://docs.google.com/spreadsheets/d/1agQiUYggMyPxCyJlG7pCbBxCdYyhBUNTbPC-RSL4MuE/edit?gid=0#gid=0")
-    else:
-        glossary_file = st.sidebar.file_uploader(
-            "用語集ファイル（CSV）をアップロード",
-            type=['csv'],
-            help="CSVファイルには 'Source' と 'Target' というヘッダーを持つ列が必要です。"
+    glossary_data = None
+    is_glossary_ready = False
+
+    if check_mode == 'ペアチェック（原文と訳文）':
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("用語ペアを入力")
+        
+        # デフォルトで表示するテキストエリアのテキスト
+        default_pair_text = """deploy,展開
+evict,削除
+extract,デプロイメント
+inject,挿入
+metric,メトリック
+overridden,上書き
+override,上書き
+overriding,上書き
+secure,安全
+unpack,デプロイメント
+unzip,デプロイメント
+"""
+
+        pair_terms_input = st.sidebar.text_area(
+            "1行に1ペアを「原文,訳文」の形式で入力してください",
+            default_pair_text,
+            height=250,
+            help="カンマ区切りで原文と訳文を入力します。"
         )
-        if glossary_file:
-            try:
-                glossary_df = pd.read_csv(glossary_file)
-                if 'Source' not in glossary_df.columns or 'Target' not in glossary_df.columns:
-                    st.sidebar.error("エラー: CSVファイルには 'Source' と 'Target' のカラムが必要です。")
-                    glossary_df = None
+        if pair_terms_input:
+            pairs = []
+            lines = pair_terms_input.strip().split('\n')
+            is_valid_format = True
+            for i, line in enumerate(lines):
+                line = line.strip()
+                if not line:
+                    continue
+                
+                parts = [p.strip() for p in line.split(',')]
+                if len(parts) == 2 and parts[0] and parts[1]:
+                    pairs.append({'Source': parts[0], 'Target': parts[1]})
                 else:
-                    st.sidebar.write("アップロードされた用語集:")
-                    st.sidebar.dataframe(glossary_df, use_container_width=True)
-            except Exception as e:
-                st.sidebar.error(f"用語集ファイルの読み込みエラー: {e}")
-                glossary_df = None
+                    st.sidebar.error(f"エラー: {i+1}行目の形式が正しくありません。「原文,訳文」の形式で入力してください。")
+                    is_valid_format = False
+                    break # エラーが見つかったら処理を停止
+            
+            if is_valid_format and pairs:
+                glossary_data = pd.DataFrame(pairs)
+                st.sidebar.write("チェック中の用語集:")
+                st.sidebar.dataframe(glossary_data, use_container_width=True, hide_index=True)
+                st.sidebar.write("用語の追加はこちら: https://docs.google.com/spreadsheets/d/1agQiUYggMyPxCyJlG7pCbBxCdYyhBUNTbPC-RSL4MuE/edit?gid=0#gid=0")
+                is_glossary_ready = True
+            elif not is_valid_format:
+                is_glossary_ready = False
+
+
+    else: # 訳文のみチェック
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("訳文内をチェックする用語")
+        target_terms_input = st.sidebar.text_area(
+            "1行に1つずつ用語を入力してください",
+            "設定の設定\n設定を設定\nクエリーし\nクエリーす\nクエリーせ\nクエリーでき",
+            height=200
+        )
+        if target_terms_input:
+            glossary_data = [term.strip() for term in target_terms_input.split('\n') if term.strip()]
+            if glossary_data:
+                st.sidebar.write("チェック中の用語:")
+                st.sidebar.dataframe(glossary_data, column_config={"value": "用語"}, use_container_width=True)
+                is_glossary_ready = True
 
     # --- メイン画面 ---
-    # st.markdown("---")
-    # st.header("TMXファイルをアップロード")
     tmx_file = st.file_uploader("チェック対象のTMXファイルを選択してください", type=['tmx'], label_visibility="collapsed")
     
     if tmx_file is not None:
-        if glossary_df is None or glossary_df.empty:
-            st.warning("使用する用語集が読み込まれていません。サイドバーで用語集を選択してください。")
+        if not is_glossary_ready:
+            st.warning("使用する用語集が読み込まれていません。サイドバーで用語集を設定してください。")
         else:
             with st.spinner("TMXファイルを処理中..."):
                 tmx_file_content = tmx_file.getvalue()
-                results_df = perform_check(tmx_file_content, glossary_df)
+                results_df = perform_check(tmx_file_content, glossary_data, check_mode)
 
                 st.subheader("チェック結果")
                 if results_df.empty:
-                    st.info("✅ 用語が使用されているセグメントは見つかりませんでした。")
+                    st.info("✅ 条件に一致するセグメントは見つかりませんでした。")
                 else:
-                    st.success(f"✅ {len(results_df)}件の用語使用が確認されました。")
-                    
-                    # st.markdownでHTMLテーブルを表示
+                    # 結果が見つかった場合のメッセージをモードによって変更
+                    if check_mode == '訳文のみチェック':
+                        st.success(f"✅ 訳文内に {len(results_df)}件の用語使用が確認されました。")
+                    else:
+                        st.success(f"✅ {len(results_df)}件の用語ペア使用が確認されました。")
+
+                    # to_htmlでHTMLテーブルに変換し、st.markdownで表示
                     # これにより、<mark>タグがハイライトとして描画される
                     html_table = results_df.to_html(escape=False, index=False)
                     st.markdown(html_table, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
+
