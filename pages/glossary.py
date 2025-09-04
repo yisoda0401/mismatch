@@ -20,7 +20,12 @@ secure,安全
 unpack,デプロイメント
 unzip,デプロイメント
 configure,設定を設定
+configure,設定の設定
 setting,設定を設定
+setting,設定の設定
+quer,クエリーし
+quer,クエリーす
+quer,クエリーせ
 """
 
 def highlight_text(text, term):
