@@ -14,7 +14,8 @@ st.subheader("日本語訳に含まれる英単語が英語原文に存在する
 
 uploaded_file = st.file_uploader("TMXファイルをアップロード", type=["tmx"])
 
-# 除外ペアの入力エリア
+# --- UIの変更箇所 ---
+# 除外設定のUIを定義
 with st.expander("除外設定", expanded=False):
     
     default_exclusion_pairs = """r:[A-Z][A-Z]+s,r:[A-Z][A-Z]+
@@ -33,12 +34,25 @@ VIP,仮想 IP
 manual page,man ページ"""
     
     exclusion_pairs_text = st.text_area(
-        "除外ペア (各行に「原語,訳語」の形式で入力。詳細は「使い方」を参照)",
+        "除外ペア (各行に「原語,訳語」の形式で入力)",
         value=default_exclusion_pairs,
         height=150,
-        help="各行に「原語,訳語」の形式で入力。大文字小文字は区別されます。"
+        help="各行に「原語,訳語」の形式で入力。大文字小文字は区別されます。詳細は「使い方」を参照。"
     )
     
+    st.markdown("---") # 区切り線
+
+    default_not_in_source_exclusions = """Red Hat
+"""
+
+    not_in_source_exclusions_text = st.text_area(
+        "「原文にない単語」から除外するリスト（1行に1つ入力）",
+        value=default_not_in_source_exclusions,
+        height=100,
+        help="ここに入力された単語やフレーズは、「原文にない単語」として検出されなくなります。"
+    )
+    # --- UIの変更ここまで ---
+
     # 除外ペアの解析
     exclusion_pairs = []
     if exclusion_pairs_text:
@@ -46,11 +60,13 @@ manual page,man ページ"""
             if line and ',' in line:
                 source, target = line.split(',', 1)
                 exclusion_pairs.append((source.strip(), target.strip()))
-    
-    if exclusion_pairs:
-        st.info(f"設定された除外ペア数: {len(exclusion_pairs)}")
-    else:
-        st.info("除外ペアが設定されていません")
+
+    # 「原文にない単語」の除外リストの解析
+    not_in_source_exclusions = set()
+    if not_in_source_exclusions_text:
+        for line in not_in_source_exclusions_text.strip().split('\n'):
+            if line.strip():
+                not_in_source_exclusions.add(line.strip())
 
 def extract_english_words(text):
     """英単語を抽出（アルファベットとアンダーバーが2文字以上連続するもの）"""
@@ -130,7 +146,8 @@ def are_singular_plural_pair(word1, word2):
     return check_regular(w1_lower, w2_lower) or check_regular(w2_lower, w1_lower)
 
 
-def analyze_tmx(file_content, exclusion_pairs):
+# --- 分析ロジックの変更箇所 ---
+def analyze_tmx(file_content, exclusion_pairs, not_in_source_exclusions):
     try:
         tree = ET.parse(io.BytesIO(file_content))
         root = tree.getroot()
@@ -143,6 +160,10 @@ def analyze_tmx(file_content, exclusion_pairs):
         
         phrase_rules = [p for p in exclusion_pairs if ' ' in p[0] or ' ' in p[1]]
         word_rules = [p for p in exclusion_pairs if ' ' not in p[0] and ' ' not in p[1]]
+
+        # 除外リストを単語とフレーズに分割
+        not_in_source_exclusion_words = {item for item in not_in_source_exclusions if ' ' not in item}
+        not_in_source_exclusion_phrases = {item for item in not_in_source_exclusions if ' ' in item}
 
         tus = root.findall(".//tu") or root.findall(".//{*}tu")
         
@@ -186,7 +207,6 @@ def analyze_tmx(file_content, exclusion_pairs):
                         en_text_analyzable = en_text_analyzable.replace(src_phrase, '')
                         ja_text_analyzable = ja_text_analyzable.replace(tgt_phrase, '')
                 
-                # ハイフン連結語の分析
                 en_hyphen_phrases = set(extract_hyphenated_phrases(en_text_analyzable))
                 ja_hyphen_phrases = set(extract_hyphenated_phrases(ja_text_analyzable))
                 hyphen_diffs_words = [p for p in ja_hyphen_phrases if p not in en_hyphen_phrases]
@@ -196,7 +216,6 @@ def analyze_tmx(file_content, exclusion_pairs):
                 for phrase in ja_hyphen_phrases:
                     ja_text_analyzable = ja_text_analyzable.replace(phrase, '')
 
-                # 単語ごとの分析
                 en_words_case_sensitive = extract_english_words(en_text_analyzable)
                 en_words_set_original = set(en_words_case_sensitive)
                 en_words_dict_case_sensitive = {word: word for word in en_words_case_sensitive}
@@ -236,11 +255,34 @@ def analyze_tmx(file_content, exclusion_pairs):
                                     potential_sp_diffs.append((en_word_orig, ja_word))
                                     break
                 
-                # 除外ルール適用
+                # --- ここからが新しいフィルタリングロジック ---
+                final_words_not_in_source_list = []
+                # 訳文中に実際に存在する除外フレーズと、その構成単語のセットを作成
+                active_exclusion_phrases_words = {}
+                for phrase in not_in_source_exclusion_phrases:
+                    if phrase in ja_text_orig:
+                        active_exclusion_phrases_words[phrase] = set(extract_english_words(phrase))
+
+                for word in potential_words_not_in_source:
+                    is_excluded = False
+                    # 1. 単語そのものが除外対象かチェック
+                    if word in not_in_source_exclusion_words:
+                        is_excluded = True
+                    
+                    # 2. 単語が除外フレーズの一部かチェック
+                    if not is_excluded:
+                        for phrase, words_in_phrase in active_exclusion_phrases_words.items():
+                            if word in words_in_phrase:
+                                is_excluded = True
+                                break
+                    
+                    if not is_excluded:
+                        final_words_not_in_source_list.append(word)
+                # --- フィルタリングロジックここまで ---
+
                 final_case_diffs_pairs = [(s, t) for s, t in potential_case_diffs if not is_pair_excluded(s, t, word_rules)]
                 final_sp_diffs_pairs = list(set([(s, t) for s, t in potential_sp_diffs if not is_pair_excluded(s, t, word_rules)]))
                 final_underscore_diffs_pairs = [(s, t) for s, t in potential_underscore_diffs if not is_pair_excluded(s, t, word_rules)]
-                final_words_not_in_source_list = [w for w in potential_words_not_in_source]
                 
                 results.append({
                     "ID": idx,
@@ -256,7 +298,6 @@ def analyze_tmx(file_content, exclusion_pairs):
                     "要確認(原文にない単語)": len(final_words_not_in_source_list) > 0,
                     "要確認(アンダーバー連結語)": len(final_underscore_diffs_pairs) > 0,
                     "要確認(ハイフン連結語)": len(hyphen_diffs_words) > 0,
-                    # ハイライト用の単語リスト
                     "case_diffs_words": final_case_diffs_pairs,
                     "sp_diffs_words": final_sp_diffs_pairs,
                     "not_in_source_words": final_words_not_in_source_list,
@@ -278,34 +319,24 @@ def analyze_tmx(file_content, exclusion_pairs):
         st.code(traceback.format_exc())
         return None
 
-# --- NEW FUNCTION ---
 def highlight_text(text, diff_data):
     """テキスト内の指定された単語をハイライトするHTMLを生成する"""
-    # HTMLエスケープを先に行う
     highlighted_text = html.escape(text)
 
-    # 各カテゴリの単語を対応するCSSクラスでハイライト
-    # 置換順が重要（長いものから、具体的なものから）
-    
-    # ハイフン
     for word in sorted(diff_data.get('hyphen', []), key=len, reverse=True):
         highlighted_text = re.sub(r'\b' + re.escape(html.escape(word)) + r'\b', f'<span class="highlight-hyphen">{html.escape(word)}</span>', highlighted_text)
 
-    # アンダーバー
     for _, word in sorted(diff_data.get('underscore', []), key=lambda x: len(x[1]), reverse=True):
         highlighted_text = re.sub(r'\b' + re.escape(html.escape(word)) + r'\b', f'<span class="highlight-underscore">{html.escape(word)}</span>', highlighted_text)
 
-    # 原文にない単語
     for word in sorted(diff_data.get('not_in_source', []), key=len, reverse=True):
         highlighted_text = re.sub(r'\b' + re.escape(html.escape(word)) + r'\b', f'<span class="highlight-not-in-source">{html.escape(word)}</span>', highlighted_text)
     
-    # 単複
     for en_word, ja_word in sorted(diff_data.get('sp', []), key=lambda x: len(x[1]), reverse=True):
         highlighted_text = re.sub(r'\b' + re.escape(html.escape(ja_word)) + r'\b', f'<span class="highlight-sp">{html.escape(ja_word)}</span>', highlighted_text)
     for en_word, ja_word in sorted(diff_data.get('sp', []), key=lambda x: len(x[0]), reverse=True):
         highlighted_text = re.sub(r'\b' + re.escape(html.escape(en_word)) + r'\b', f'<span class="highlight-sp">{html.escape(en_word)}</span>', highlighted_text)
 
-    # 大/小文字
     for en_word, ja_word in sorted(diff_data.get('case', []), key=lambda x: len(x[1]), reverse=True):
         highlighted_text = re.sub(r'\b' + re.escape(html.escape(ja_word)) + r'\b', f'<span class="highlight-case">{html.escape(ja_word)}</span>', highlighted_text)
     for en_word, ja_word in sorted(diff_data.get('case', []), key=lambda x: len(x[0]), reverse=True):
@@ -318,7 +349,8 @@ if uploaded_file is not None:
     file_content = uploaded_file.read()
     
     with st.spinner("TMXファイルを分析中..."):
-        df = analyze_tmx(file_content, exclusion_pairs)
+        # --- 関数呼び出しの変更箇所 ---
+        df = analyze_tmx(file_content, exclusion_pairs, not_in_source_exclusions)
     
     if df is not None and not df.empty:
         st.metric("総セグメント数", f"{len(df)}")
@@ -456,12 +488,13 @@ if uploaded_file is not None:
 else:
     st.info("TMXファイルをアップロードして分析を開始してください。")
 
+# --- 「使い方」の更新箇所 ---
 with st.expander("使い方"):
     st.markdown("""
     ### このアプリケーションの使い方
     
     1. 上部の「Browse files」ボタンをクリックしてTMXファイルをアップロードします。
-    2. 必要に応じて「除外設定」で除外する原語・訳語ペアを設定します。
+    2. 必要に応じて「除外設定」で除外するペアや単語を設定します。
     3. アプリが自動的にファイルを分析し、結果を表示します。
     4. **分析結果の概要**: 各確認項目について、要確認と判断されたセグメント数が表示されます。
     5. **分析結果テーブル**:
@@ -480,17 +513,18 @@ with st.expander("使い方"):
 
     ### 除外設定について
     
-    「除外設定」では、特定の差異ペアを検出対象から除外できます。除外設定は2段階で適用されます。
+    「除外設定」では、特定の差異を検出対象から除外できます。設定項目は2種類あります。
     
-    1.  **フレーズの除外**:
-        - 設定にスペースを含むルール（例: `personal access token,Personal Access Token`）は「フレーズ」として扱われます。
-        - 分析の最初に、原文と訳文の両方に一致するフレーズが存在する場合、そのフレーズは後続の単語分析の対象から除外されます。
-        - (注: 現在、フレーズの除外に正規表現は使用できません)
-        
-    2.  **単語の除外**:
-        - フレーズ除外後、残ったテキストに対して単語ごとの差異が検出されます。
-        - スペースを含まないルール（例: `CPUs,CPU`）は、検出された個々の単語ペアに適用され、一致したものが結果から除外されます。
-        - 単語の除外では正規表現が使用できます（例: `r:[A-Z]+s,r:[A-Z]+`）。
+    #### 1. 除外ペア
+    原文と訳文のペアを指定して除外します。この設定はさらに2段階で適用されます。
+    - **フレーズの除外**: 設定にスペースを含むルール（例: `personal access token,Personal Access Token`）は「フレーズ」として扱われ、分析の最初に、原文と訳文の両方に一致するフレーズが後続の単語分析の対象から除外されます。(注: フレーズの除外に正規表現は使用できません)
+    - **単語の除外**: スペースを含まないルール（例: `CPUs,CPU`）は、検出された個々の単語ペアに適用され、一致したものが結果から除外されます。単語の除外では正規表現が使用できます（例: `r:[A-Z]+s,r:[A-Z]+`）。
+    
+    #### 2. 「原文にない単語」から除外するリスト
+    **訳文のみを対象**として、指定した単語やフレーズを「原文にない単語」の検出結果から除外します。
+    - **目的**: 訳注や製品の固有名詞など、意図的に訳文に追加した英単語が警告として表示されないようにします。
+    - **使い方**: 1行に1つ、除外したい単語またはフレーズを入力します（例: `ABC Company`）。
+    - **動作**: ここに `ABC Company` と入力すると、訳文に `ABC Company` が含まれていた場合、`ABC` と `Company` は「原文にない単語」として検出されなくなります。
     
     ### 英単語の抽出ルール
     - **通常**: アルファベットとアンダーバーが2文字以上連続するものを英単語として抽出します。

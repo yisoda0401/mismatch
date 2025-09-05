@@ -1,12 +1,11 @@
+# translate-toolkitライブラリが必要です。
+# pip install translate-toolkit
 import streamlit as st
-import xml.etree.ElementTree as ET
 import re
 import pandas as pd
 import io
 import html
-
-# XML名前空間を登録
-ET.register_namespace('xml', 'http://www.w3.org/XML/1998/namespace')
+from translate.storage import tmx
 
 st.set_page_config(page_title="TMX分析ツール", layout="wide")
 st.title("TMX分析ツール")
@@ -77,20 +76,6 @@ def extract_hyphenated_phrases(text):
     """ハイフンが2つ以上含まれるフレーズを抽出"""
     return re.findall(r'\b[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+){2,}\b', text)
 
-def get_full_text_content(element):
-    """要素内のすべてのテキストを再帰的に取得（タグを無視）"""
-    if element is None:
-        return ""
-    
-    text = element.text or ""
-    
-    for child in element:
-        text += get_full_text_content(child)
-        if child.tail:
-            text += child.tail
-            
-    return text
-
 def is_pair_excluded(source_word, target_word, exclusion_rules):
     """指定された単語ペアが除外ルールに一致するかを判断"""
     for source_rule, target_rule in exclusion_rules:
@@ -146,57 +131,32 @@ def are_singular_plural_pair(word1, word2):
     return check_regular(w1_lower, w2_lower) or check_regular(w2_lower, w1_lower)
 
 
-# --- 分析ロジックの変更箇所 ---
 def analyze_tmx(file_content, exclusion_pairs, not_in_source_exclusions):
+    """
+    TMXファイルを解析する関数。
+    """
     try:
-        tree = ET.parse(io.BytesIO(file_content))
-        root = tree.getroot()
-        
-        namespaces = dict([node for _, node in ET.iterparse(io.BytesIO(file_content), events=['start-ns'])])
-        if not namespaces:
-            namespaces['xml'] = 'http://www.w3.org/XML/1998/namespace'
+        tmx_file_obj = io.BytesIO(file_content)
+        tmx_file = tmx.tmxfile(tmx_file_obj)
         
         results = []
         
         phrase_rules = [p for p in exclusion_pairs if ' ' in p[0] or ' ' in p[1]]
         word_rules = [p for p in exclusion_pairs if ' ' not in p[0] and ' ' not in p[1]]
 
-        # 除外リストを単語とフレーズに分割
         not_in_source_exclusion_words = {item for item in not_in_source_exclusions if ' ' not in item}
         not_in_source_exclusion_phrases = {item for item in not_in_source_exclusions if ' ' in item}
 
-        tus = root.findall(".//tu") or root.findall(".//{*}tu")
-        
-        for idx, tu in enumerate(tus, 1):
-            en_text_orig = ""
-            ja_text_orig = ""
-            
-            segs = tu.findall(".//seg") or tu.findall(".//{*}seg")
-            
-            for seg in segs:
-                parent = None
-                for parent_elem in tu:
-                    if seg in parent_elem.iter():
-                        parent = parent_elem
-                        break
-                
-                lang = None
-                if parent is not None:
-                    lang = parent.get("xml:lang") or parent.get("{http://www.w3.org/XML/1998/namespace}lang")
-                    if lang is None:
-                        for attr_name, attr_value in parent.attrib.items():
-                            if attr_name.endswith('lang'):
-                                lang = attr_value
-                                break
-                
-                text_content = get_full_text_content(seg)
-                
-                if lang == "en-us" or lang == "en":
-                    en_text_orig = text_content
-                elif lang == "ja" or lang == "ja-jp":
-                    ja_text_orig = text_content
+        for idx, unit in enumerate(tmx_file.units, 1):
+            en_text_orig = unit.source
+            ja_text_orig = unit.target
             
             if en_text_orig and ja_text_orig:
+                en_tags = re.findall(r'(<[^>]+>)', en_text_orig)
+                ja_tags = re.findall(r'(<[^>]+>)', ja_text_orig)
+                tag_mismatch = en_tags != ja_tags
+                tag_mismatch_details = f"原文: {en_tags} / 訳文: {ja_tags}" if tag_mismatch else "なし"
+
                 en_text_analyzable = en_text_orig
                 ja_text_analyzable = ja_text_orig
 
@@ -255,9 +215,7 @@ def analyze_tmx(file_content, exclusion_pairs, not_in_source_exclusions):
                                     potential_sp_diffs.append((en_word_orig, ja_word))
                                     break
                 
-                # --- ここからが新しいフィルタリングロジック ---
                 final_words_not_in_source_list = []
-                # 訳文中に実際に存在する除外フレーズと、その構成単語のセットを作成
                 active_exclusion_phrases_words = {}
                 for phrase in not_in_source_exclusion_phrases:
                     if phrase in ja_text_orig:
@@ -265,11 +223,9 @@ def analyze_tmx(file_content, exclusion_pairs, not_in_source_exclusions):
 
                 for word in potential_words_not_in_source:
                     is_excluded = False
-                    # 1. 単語そのものが除外対象かチェック
                     if word in not_in_source_exclusion_words:
                         is_excluded = True
                     
-                    # 2. 単語が除外フレーズの一部かチェック
                     if not is_excluded:
                         for phrase, words_in_phrase in active_exclusion_phrases_words.items():
                             if word in words_in_phrase:
@@ -278,12 +234,12 @@ def analyze_tmx(file_content, exclusion_pairs, not_in_source_exclusions):
                     
                     if not is_excluded:
                         final_words_not_in_source_list.append(word)
-                # --- フィルタリングロジックここまで ---
 
                 final_case_diffs_pairs = [(s, t) for s, t in potential_case_diffs if not is_pair_excluded(s, t, word_rules)]
                 final_sp_diffs_pairs = list(set([(s, t) for s, t in potential_sp_diffs if not is_pair_excluded(s, t, word_rules)]))
                 final_underscore_diffs_pairs = [(s, t) for s, t in potential_underscore_diffs if not is_pair_excluded(s, t, word_rules)]
                 
+                # --- ★変更点: 列を統合するため、各詳細情報をそのまま格納 ---
                 results.append({
                     "ID": idx,
                     "英語原文": en_text_orig,
@@ -293,11 +249,13 @@ def analyze_tmx(file_content, exclusion_pairs, not_in_source_exclusions):
                     "原文にない単語": ", ".join([f"-/{w}" for w in final_words_not_in_source_list]) or "なし",
                     "アンダーバー連結語": ", ".join([f"{s}/{t}" for s, t in final_underscore_diffs_pairs]) or "なし",
                     "ハイフン連結語": ", ".join([f"-/{p}" for p in hyphen_diffs_words]) or "なし",
+                    "タグの不一致": tag_mismatch_details,
                     "要確認(大/小文字違い)": len(final_case_diffs_pairs) > 0,
                     "要確認(単複の違い)": len(final_sp_diffs_pairs) > 0,
                     "要確認(原文にない単語)": len(final_words_not_in_source_list) > 0,
                     "要確認(アンダーバー連結語)": len(final_underscore_diffs_pairs) > 0,
                     "要確認(ハイフン連結語)": len(hyphen_diffs_words) > 0,
+                    "要確認(タグの不一致)": tag_mismatch,
                     "case_diffs_words": final_case_diffs_pairs,
                     "sp_diffs_words": final_sp_diffs_pairs,
                     "not_in_source_words": final_words_not_in_source_list,
@@ -308,8 +266,8 @@ def analyze_tmx(file_content, exclusion_pairs, not_in_source_exclusions):
         if not results:
             st.warning("翻訳ペアが見つかりませんでした。TMXファイルの構造を確認してください。")
             with st.expander("TMXファイル構造（デバッグ）"):
-                xml_str = ET.tostring(root, encoding='utf-8').decode('utf-8')
-                st.code(xml_str[:5000] + ("..." if len(xml_str) > 5000 else ""), language="xml")
+                tmx_string_for_debug = file_content.decode('utf-8', errors='ignore')
+                st.code(tmx_string_for_debug[:5000] + ("..." if len(tmx_string_for_debug) > 5000 else ""), language="xml")
             return None
             
         return pd.DataFrame(results)
@@ -318,6 +276,7 @@ def analyze_tmx(file_content, exclusion_pairs, not_in_source_exclusions):
         import traceback
         st.code(traceback.format_exc())
         return None
+
 
 def highlight_text(text, diff_data):
     """テキスト内の指定された単語をハイライトするHTMLを生成する"""
@@ -344,76 +303,99 @@ def highlight_text(text, diff_data):
 
     return highlighted_text
 
+# --- ★追加: 3つの列をHTML形式で結合する関数 ---
+def combine_other_issues(row):
+    """「その他」列に表示するためのHTML文字列を生成する"""
+    parts = []
+    # 各問題があった場合に、内容をリストに追加
+    if row['アンダーバー連結語'] != 'なし':
+        parts.append(f"<b>アンダーバー連結語:</b> {html.escape(row['アンダーバー連結語'])}")
+    if row['ハイフン連結語'] != 'なし':
+        parts.append(f"<b>ハイフン連結語:</b> {html.escape(row['ハイフン連結語'])}")
+    if row['タグの不一致'] != 'なし':
+        parts.append(f"<b>タグの不一致:</b> {html.escape(row['タグの不一致'])}")
+    
+    if not parts:
+        return 'なし'
+    # 各問題を改行で区切って返す
+    return '<br>'.join(parts)
 
 if uploaded_file is not None:
     file_content = uploaded_file.read()
     
     with st.spinner("TMXファイルを分析中..."):
-        # --- 関数呼び出しの変更箇所 ---
         df = analyze_tmx(file_content, exclusion_pairs, not_in_source_exclusions)
     
     if df is not None and not df.empty:
         st.metric("総セグメント数", f"{len(df)}")
         
-        col1, col2, col3, col4, col5 = st.columns(5)
+        # --- ★変更点: 列を4つに変更 ---
+        col1, col2, col3, col4 = st.columns(4)
         with col1: 
-            st.metric("要確認 (大/小文字違い)", f"{df['要確認(大/小文字違い)'].sum()}")
+            st.metric("大/小文字違い", f"{df['要確認(大/小文字違い)'].sum()}")
         with col2:
-            st.metric("要確認 (単複の違い)", f"{df['要確認(単複の違い)'].sum()}")
+            st.metric("単複の違い", f"{df['要確認(単複の違い)'].sum()}")
         with col3:
-            st.metric("要確認 (原文にない単語)", f"{df['要確認(原文にない単語)'].sum()}")
+            st.metric("原文にない単語", f"{df['要確認(原文にない単語)'].sum()}")
+        # --- ★変更点: 3つの指標を統合して「その他」として表示 ---
         with col4:
-            st.metric("要確認 (アンダーバー連結語)", f"{df['要確認(アンダーバー連結語)'].sum()}")
-        with col5:
-            st.metric("要確認 (ハイフン連結語)", f"{df['要確認(ハイフン連結語)'].sum()}")
+            other_issues_count = df[
+                (df['要確認(アンダーバー連結語)']) |
+                (df['要確認(ハイフン連結語)']) |
+                (df['要確認(タグの不一致)'])
+            ].shape[0]
+            st.metric("その他", f"{other_issues_count}")
         
         st.subheader("分析結果")
         
+        # --- ★変更点: フィルタオプションを更新 ---
         filter_option = st.radio(
             "表示オプション:",
-            ["すべて表示", "大/小文字違い", "単複の違い", "原文にない単語", "アンダーバー連結語", "ハイフン連結語", "いずれかの方法で要確認"],
-            index=6, horizontal=True
+            ["すべて表示", "大/小文字違い", "単複の違い", "原文にない単語", "その他", "いずれかの方法で要確認"],
+            index=5, horizontal=True
         )
         
+        # --- ★追加: 「その他」列をデータフレームに追加 ---
+        df['その他'] = df.apply(combine_other_issues, axis=1)
+        df['要確認(その他)'] = (df['要確認(アンダーバー連結語)']) | (df['要確認(ハイフン連結語)']) | (df['要確認(タグの不一致)'])
+
         if filter_option == "大/小文字違い":
             filtered_df = df[df["要確認(大/小文字違い)"] == True]
         elif filter_option == "単複の違い":
             filtered_df = df[df["要確認(単複の違い)"] == True]
         elif filter_option == "原文にない単語":
             filtered_df = df[df["要確認(原文にない単語)"] == True]
-        elif filter_option == "アンダーバー連結語":
-            filtered_df = df[df["要確認(アンダーバー連結語)"] == True]
-        elif filter_option == "ハイフン連結語":
-            filtered_df = df[df["要確認(ハイフン連結語)"] == True]
+        # --- ★変更点: 「その他」でのフィルタリング ---
+        elif filter_option == "その他":
+            filtered_df = df[df["要確認(その他)"] == True]
         elif filter_option == "いずれかの方法で要確認":
             filtered_df = df[
                              (df["要確認(原文にない単語)"] == True) | (df["要確認(大/小文字違い)"] == True) |
-                             (df["要確認(単複の違い)"] == True) | (df["要確認(アンダーバー連結語)"] == True) |
-                             (df["要確認(ハイフン連結語)"] == True)
+                             (df["要確認(単複の違い)"] == True) | (df["要確認(その他)"] == True)
                             ]
         else:
             filtered_df = df
         
         base_columns = ["ID", "英語原文", "日本語訳"]
         
+        # --- ★変更点: 表示列の制御を更新 ---
         if filter_option == "大/小文字違い":
             columns_to_display = base_columns + ["大/小文字違い"]
         elif filter_option == "単複の違い":
             columns_to_display = base_columns + ["単複の違い"]
         elif filter_option == "原文にない単語":
             columns_to_display = base_columns + ["原文にない単語"]
-        elif filter_option == "アンダーバー連結語":
-            columns_to_display = base_columns + ["アンダーバー連結語"]
-        elif filter_option == "ハイフン連結語":
-            columns_to_display = base_columns + ["ハイフン連結語"]
+        elif filter_option == "その他":
+            columns_to_display = base_columns + ["その他"]
         else:
-            columns_to_display = base_columns + ["大/小文字違い", "単複の違い", "原文にない単語", "アンダーバー連結語", "ハイフン連結語"]
+            columns_to_display = base_columns + ["大/小文字違い", "単複の違い", "原文にない単語", "その他"]
             
         if not filtered_df.empty: 
             filtered_df_display = filtered_df[columns_to_display].copy()
         else: 
             filtered_df_display = pd.DataFrame(columns=columns_to_display)
 
+        # --- ★変更点: スタイルに微調整 ---
         html_str = """
         <style>
             .styled-table { border-collapse: collapse; width: 100%; font-size: 14px; text-align: left; }
@@ -444,22 +426,27 @@ if uploaded_file is not None:
                     
                     if col_name == "英語原文":
                         diff_data = {
-                            'case': row['case_diffs_words'],
-                            'sp': row['sp_diffs_words']
+                            'case': df.loc[row.name]['case_diffs_words'],
+                            'sp': df.loc[row.name]['sp_diffs_words']
                         }
-                        display_text = highlight_text(cell_value, diff_data)
+                        display_text = highlight_text(str(cell_value), diff_data)
                         html_str += f"<td class='{cell_class.strip()}'>{display_text}</td>"
                     elif col_name == "日本語訳":
+                        # 元のデータフレームからハイライト用の単語リストを取得
+                        original_row = df.loc[row.name]
                         diff_data = {
-                            'case': row['case_diffs_words'],
-                            'sp': row['sp_diffs_words'],
-                            'not_in_source': row['not_in_source_words'],
-                            'underscore': row['underscore_diffs_words'],
-                            'hyphen': row['hyphen_diffs_words']
+                            'case': original_row['case_diffs_words'],
+                            'sp': original_row['sp_diffs_words'],
+                            'not_in_source': original_row['not_in_source_words'],
+                            'underscore': original_row['underscore_diffs_words'],
+                            'hyphen': original_row['hyphen_diffs_words']
                         }
-                        display_text = highlight_text(cell_value, diff_data)
+                        display_text = highlight_text(str(cell_value), diff_data)
                         html_str += f"<td class='{cell_class.strip()}'>{display_text}</td>"
-                    elif cell_value == "なし" and col_name in ["原文にない単語", "大/小文字違い", "単複の違い", "アンダーバー連結語", "ハイフン連結語"]: 
+                    # --- ★変更点: 「その他」列はHTMLをそのまま出力 ---
+                    elif col_name == "その他":
+                        html_str += f"<td class='{cell_class.strip()}'>{cell_value}</td>"
+                    elif cell_value == "なし" and col_name in ["原文にない単語", "大/小文字違い", "単複の違い"]: 
                         html_str += f"<td class='{cell_class.strip()}' style='color: green;'>{cell_value}</td>"
                     else:
                         html_str += f"<td class='{cell_class.strip()}'>{html.escape(str(cell_value))}</td>"
@@ -470,7 +457,22 @@ if uploaded_file is not None:
         st.write(html_str, unsafe_allow_html=True)
         
         if not filtered_df.empty:
+            # CSV出力用に「その他」列をプレーンテキストに変換
+            def format_other_for_csv(row):
+                parts = []
+                if row['アンダーバー連結語'] != 'なし':
+                    parts.append(f"アンダーバー連結語: {row['アンダーバー連結語']}")
+                if row['ハイフン連結語'] != 'なし':
+                    parts.append(f"ハイフン連結語: {row['ハイフン連結語']}")
+                if row['タグの不一致'] != 'なし':
+                    parts.append(f"タグの不一致: {row['タグの不一致']}")
+                return " | ".join(parts) if parts else "なし"
+            
             csv_df = filtered_df[columns_to_display].copy()
+            # 「その他」列が存在する場合のみ処理
+            if 'その他' in csv_df.columns:
+                 csv_df['その他'] = filtered_df.apply(format_other_for_csv, axis=1)
+
             csv = csv_df.to_csv(index=False).encode('utf-8-sig')
             st.download_button(
                 label="CSV形式でダウンロード",
@@ -488,7 +490,7 @@ if uploaded_file is not None:
 else:
     st.info("TMXファイルをアップロードして分析を開始してください。")
 
-# --- 「使い方」の更新箇所 ---
+# --- ★変更点: 「使い方」を更新 ---
 with st.expander("使い方"):
     st.markdown("""
     ### このアプリケーションの使い方
@@ -503,13 +505,15 @@ with st.expander("使い方"):
         - **大/小文字違い**: 日本語訳中の英単語が、大文字・小文字を区別すると英語原文に存在しないが、無視すると存在する場合に、そのペアをリストアップします (例: `Pod/pod`)。
         - **単複の違い**: 日本語訳中の英単語が、英語原文の単語と単数形・複数形のみ異なる場合に、そのペアをリストアップします (例: `book/books`)。
         - **原文にない単語**: 日本語訳中の英単語が、大文字・小文字を無視しても英語原文に存在しない場合に、`- / 訳文の単語` の形式でリストアップします (例: `-/word`)。
-        - **アンダーバー連結語**: 訳文に含まれるアンダースコアを含む単語が、原文に存在しない場合に `- / 訳文の単語` 形式でリストアップします (例: `-/new_var`)。
-        - **ハイフン連結語**: 訳文に含まれるハイフンが2つ以上のフレーズ（例: `insights-runtime-extractor`）が、原文に存在しない場合に `- / 訳文のフレーズ` 形式でリストアップします。
+        - **その他 (新設)**: 以下の3つの項目をまとめて表示します。
+            - **アンダーバー連結語**: 訳文に含まれるアンダースコアを含む単語が、原文に存在しない場合に表示します。
+            - **ハイフン連結語**: 訳文に含まれるハイフンが2つ以上のフレーズが、原文に存在しない場合に表示します。
+            - **タグの不一致**: 原文と訳文で、`<ph>`や`<strong>`のようなインラインタグの並びが異なる場合に、その詳細を表示します。
     6. **表示オプション**: テーブルに表示するセグメントをフィルタリングできます。
     7. 分析結果はCSV形式でダウンロードできます。
     
     ### 「要確認」の判断基準
-    - 各「要確認」列にペアが1つ以上リストアップされた場合に、それぞれのフラグが立ちます。
+    - 各「要確認」列にペアが1つ以上リストアップされたり、不一致が検出された場合に、それぞれのフラグが立ちます。
 
     ### 除外設定について
     
@@ -527,6 +531,6 @@ with st.expander("使い方"):
     - **動作**: ここに `ABC Company` と入力すると、訳文に `ABC Company` が含まれていた場合、`ABC` と `Company` は「原文にない単語」として検出されなくなります。
     
     ### 英単語の抽出ルール
-    - **通常**: アルファベットとアンダーバーが2文字以上連続するものを英単語として抽出します。
+    - **通常**: アルファベットとアンダーバーが2文字以上連続するものを英単語として抽出します。インラインタグは無視されます。
     - **ハイフン連結語**: 英数字がハイフンで3つ以上連結されたもの（例: `word-word-word`）を個別のカテゴリとして抽出し、分析します。
     """)
