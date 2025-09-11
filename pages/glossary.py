@@ -179,7 +179,10 @@ def main():
         
         # デフォルトで表示するテキストエリアのテキスト
         default_pair_text = """deploy,展開
+deprecate,廃止
 evict,削除
+evict,エビクト
+eviction,エビクション
 extract,デプロイメント
 inject,挿入
 metric,メトリック
