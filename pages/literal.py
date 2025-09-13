@@ -1,0 +1,155 @@
+import streamlit as st
+import xml.etree.ElementTree as ET
+import pandas as pd
+
+def get_full_text(element):
+    """
+    指定されたXML要素内のすべてのテキスト（子要素を含む）を連結して返す。
+    """
+    if element is None:
+        return ""
+    # itertext() は要素内のすべてのテキストノードを再帰的に取得します
+    return "".join(element.itertext()).strip().replace('\n', ' ').replace('\r', '')
+
+def extract_segments(xml_content):
+    """
+    XMLコンテンツから<literal>タグを含むセグメントを抽出する。
+    セグメントは、<literal>タグの親要素によって定義される。
+    """
+    segments = []
+    # XMLパース時のエラーをハンドル
+    try:
+        # 文字列の先頭にある可能性のあるBOM（バイトオーダーマーク）を削除
+        if xml_content.startswith('\ufeff'):
+            xml_content = xml_content[1:]
+        root = ET.fromstring(xml_content)
+    except ET.ParseError as e:
+        st.error(f"XMLの解析に失敗しました: {e}")
+        return None
+
+    # DocBookのデフォルトネームスペースを定義
+    # findallなどでタグを検索する際に必要
+    namespace = {'db': 'http://docbook.org/ns/docbook'}
+    
+    # --- 修正箇所: 親要素を取得するためのマップを作成 ---
+    # XPathの'..'が古いバージョンのPythonでサポートされていない問題への対策
+    parent_map = {c: p for p in root.iter() for c in p}
+    
+    # すべての<literal>タグの親要素を重複なく、ドキュメント順に取得
+    parent_elements = []
+    seen_parents = set()
+    # .// を使うことで、ルート要素から見て任意の子孫要素を検索
+    for literal_element in root.findall('.//db:literal', namespace):
+        # --- 修正箇所: マップから親要素を取得 ---
+        parent = parent_map.get(literal_element)
+        if parent is not None and parent not in seen_parents:
+            parent_elements.append(parent)
+            seen_parents.add(parent)
+
+    # 抽出した親要素ごとにセグメント情報を作成
+    for parent in parent_elements:
+        parent_text = get_full_text(parent)
+        
+        # 親要素に直接含まれる<literal>タグの内容を取得
+        literal_tags = parent.findall('db:literal', namespace)
+        
+        # <literal>タグ内のテキストをsetとして保存（順不同の比較のため）
+        # <literal>タグ内にさらに子要素がある場合も考慮してget_full_textを使用
+        literals_text_set = {get_full_text(lit) for lit in literal_tags}
+        
+        segments.append({
+            'parent_text': parent_text,
+            'literals': literals_text_set
+        })
+        
+    return segments
+
+# --- Streamlit UI部分 ---
+st.set_page_config(layout="wide")
+
+st.title('XML `<literal>` タグ比較ツール')
+st.write("""
+翻訳前（ソース）と翻訳後（ターゲット）のXMLファイルをアップロードしてください。
+このアプリは、対応する各セグメント内の`<literal>`タグの内容を比較し、
+翻訳によって変更されてはいけない文字列（例: `kinit`）が変更されていないかを確認します。
+""")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    source_file = st.file_uploader("1. ソースXMLファイルをアップロード", type="xml")
+
+with col2:
+    target_file = st.file_uploader("2. ターゲットXMLファイルをアップロード", type="xml")
+
+if st.button("比較を実行する", use_container_width=True):
+    if source_file is not None and target_file is not None:
+        with st.spinner("ファイルを処理・比較しています..."):
+            # アップロードされたファイルを読み込む
+            source_content = source_file.getvalue().decode("utf-8")
+            target_content = target_file.getvalue().decode("utf-8")
+
+            # 各ファイルからセグメントを抽出
+            source_segments = extract_segments(source_content)
+            target_segments = extract_segments(target_content)
+
+            # 抽出が成功した場合のみ処理を続行
+            if source_segments is not None and target_segments is not None:
+                # セグメント数が異なる場合はエラーを表示
+                if len(source_segments) != len(target_segments):
+                    st.error(
+                        f"エラー: 抽出されたセグメントの数が異なります。"
+                        f"ソース: {len(source_segments)}セグメント, "
+                        f"ターゲット: {len(target_segments)}セグメント。"
+                        "ファイルの構造が同一であることを確認してください。"
+                    )
+                else:
+                    results_data = []
+                    mismatch_count = 0
+                    # すべてのセグメントをループして結果リストを作成
+                    for i, source_seg in enumerate(source_segments):
+                        target_seg = target_segments[i]
+                        
+                        # <literal>タグの内容が一致するかどうかを判定
+                        is_match = source_seg['literals'] == target_seg['literals']
+                        if not is_match:
+                            mismatch_count += 1
+                        
+                        results_data.append({
+                            "状態": "✅ 一致" if is_match else "❌ 不一致",
+                            "ソースセグメント": source_seg['parent_text'],
+                            "ターゲットセグメント": target_seg['parent_text'],
+                            "ソースの<literal>": ", ".join(sorted(list(source_seg['literals']))),
+                            "ターゲットの<literal>": ", ".join(sorted(list(target_seg['literals']))),
+                        })
+                    
+                    # 結果のサマリーを表示
+                    if results_data:
+                        st.info(f"全 {len(results_data)} セグメントの比較結果を表示します。")
+                        if mismatch_count > 0:
+                            st.warning(f"{mismatch_count}件の不一致が見つかりました。")
+                        else:
+                            st.success("素晴らしい！`<literal>`タグの内容に不一致は見つかりませんでした。")
+
+                        # 結果をPandas DataFrameに変換
+                        df = pd.DataFrame(results_data)
+                        # 表示する列の順序を定義
+                        df = df[["状態", "ソースセグメント", "ターゲットセグメント", "ソースの<literal>", "ターゲットの<literal>"]]
+
+                        # 不一致の行をハイライトする関数
+                        def highlight_mismatch(row):
+                            # 不一致の場合、背景を薄い赤色にする
+                            color = '#fff0f0' 
+                            return [f'background-color: {color}' if row.状態 == '❌ 不一致' else '' for _ in row]
+
+                        # スタイルを適用してDataFrameを表示
+                        st.dataframe(
+                            df.style.apply(highlight_mismatch, axis=1),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+                    else:
+                        st.info("比較対象となる`<literal>`タグを含むセグメントが見つかりませんでした。")
+    else:
+        st.warning("ソースとターゲット、両方のXMLファイルをアップロードしてください。")
+
