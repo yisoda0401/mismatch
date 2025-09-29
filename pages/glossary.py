@@ -179,7 +179,6 @@ def main():
         
         # デフォルトで表示するテキストエリアのテキスト
         default_pair_text = """deploy,展開
-deprecate,廃止
 evict,削除
 evict,エビクト
 eviction,エビクション
@@ -193,6 +192,12 @@ secure,安全
 unpack,デプロイメント
 unzip,デプロイメント
 update,更新プログラム
+deprecate,廃止
+toleration,容認
+drain,ドレイン
+anti-affinity,非アフィニティー
+graceful,正常
+channel,チャンネル
 """
 
         pair_terms_input = st.sidebar.text_area(
@@ -242,7 +247,7 @@ update,更新プログラム
 (?<!:|-)\\s参照し
 (?<!:|-)\\s選択し
 (?<!:|-)\\sクリックし
-\\s~"""
+\\s~\\s"""
         
         target_terms_input = st.sidebar.text_area(
             "1行に1つずつ用語または正規表現を入力",
