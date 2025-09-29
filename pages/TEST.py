@@ -154,7 +154,9 @@ def analyze_tmx(file_content, exclusion_pairs, not_in_source_exclusions):
             if en_text_orig and ja_text_orig:
                 en_tags = re.findall(r'(<[^>]+>)', en_text_orig)
                 ja_tags = re.findall(r'(<[^>]+>)', ja_text_orig)
-                tag_mismatch = en_tags != ja_tags
+                
+                # --- ★変更点: タグのリストをソートしてから比較し、順序の違いを無視 ---
+                tag_mismatch = sorted(en_tags) != sorted(ja_tags)
                 tag_mismatch_details = f"原文: {en_tags} / 訳文: {ja_tags}" if tag_mismatch else "なし"
 
                 en_text_analyzable = en_text_orig
@@ -239,7 +241,6 @@ def analyze_tmx(file_content, exclusion_pairs, not_in_source_exclusions):
                 final_sp_diffs_pairs = list(set([(s, t) for s, t in potential_sp_diffs if not is_pair_excluded(s, t, word_rules)]))
                 final_underscore_diffs_pairs = [(s, t) for s, t in potential_underscore_diffs if not is_pair_excluded(s, t, word_rules)]
                 
-                # --- ★変更点: 列を統合するため、各詳細情報をそのまま格納 ---
                 results.append({
                     "ID": idx,
                     "英語原文": en_text_orig,
@@ -303,11 +304,9 @@ def highlight_text(text, diff_data):
 
     return highlighted_text
 
-# --- ★追加: 3つの列をHTML形式で結合する関数 ---
 def combine_other_issues(row):
     """「その他」列に表示するためのHTML文字列を生成する"""
     parts = []
-    # 各問題があった場合に、内容をリストに追加
     if row['アンダーバー連結語'] != 'なし':
         parts.append(f"<b>アンダーバー連結語:</b> {html.escape(row['アンダーバー連結語'])}")
     if row['ハイフン連結語'] != 'なし':
@@ -317,7 +316,6 @@ def combine_other_issues(row):
     
     if not parts:
         return 'なし'
-    # 各問題を改行で区切って返す
     return '<br>'.join(parts)
 
 if uploaded_file is not None:
@@ -329,7 +327,6 @@ if uploaded_file is not None:
     if df is not None and not df.empty:
         st.metric("総セグメント数", f"{len(df)}")
         
-        # --- ★変更点: 列を4つに変更 ---
         col1, col2, col3, col4 = st.columns(4)
         with col1: 
             st.metric("大/小文字違い", f"{df['要確認(大/小文字違い)'].sum()}")
@@ -337,7 +334,6 @@ if uploaded_file is not None:
             st.metric("単複の違い", f"{df['要確認(単複の違い)'].sum()}")
         with col3:
             st.metric("原文にない単語", f"{df['要確認(原文にない単語)'].sum()}")
-        # --- ★変更点: 3つの指標を統合して「その他」として表示 ---
         with col4:
             other_issues_count = df[
                 (df['要確認(アンダーバー連結語)']) |
@@ -348,14 +344,12 @@ if uploaded_file is not None:
         
         st.subheader("分析結果")
         
-        # --- ★変更点: フィルタオプションを更新 ---
         filter_option = st.radio(
             "表示オプション:",
             ["すべて表示", "大/小文字違い", "単複の違い", "原文にない単語", "その他", "いずれかの方法で要確認"],
             index=5, horizontal=True
         )
         
-        # --- ★追加: 「その他」列をデータフレームに追加 ---
         df['その他'] = df.apply(combine_other_issues, axis=1)
         df['要確認(その他)'] = (df['要確認(アンダーバー連結語)']) | (df['要確認(ハイフン連結語)']) | (df['要確認(タグの不一致)'])
 
@@ -365,7 +359,6 @@ if uploaded_file is not None:
             filtered_df = df[df["要確認(単複の違い)"] == True]
         elif filter_option == "原文にない単語":
             filtered_df = df[df["要確認(原文にない単語)"] == True]
-        # --- ★変更点: 「その他」でのフィルタリング ---
         elif filter_option == "その他":
             filtered_df = df[df["要確認(その他)"] == True]
         elif filter_option == "いずれかの方法で要確認":
@@ -378,7 +371,6 @@ if uploaded_file is not None:
         
         base_columns = ["ID", "英語原文", "日本語訳"]
         
-        # --- ★変更点: 表示列の制御を更新 ---
         if filter_option == "大/小文字違い":
             columns_to_display = base_columns + ["大/小文字違い"]
         elif filter_option == "単複の違い":
@@ -395,7 +387,6 @@ if uploaded_file is not None:
         else: 
             filtered_df_display = pd.DataFrame(columns=columns_to_display)
 
-        # --- ★変更点: スタイルに微調整 ---
         html_str = """
         <style>
             .styled-table { border-collapse: collapse; width: 100%; font-size: 14px; text-align: left; }
@@ -432,7 +423,6 @@ if uploaded_file is not None:
                         display_text = highlight_text(str(cell_value), diff_data)
                         html_str += f"<td class='{cell_class.strip()}'>{display_text}</td>"
                     elif col_name == "日本語訳":
-                        # 元のデータフレームからハイライト用の単語リストを取得
                         original_row = df.loc[row.name]
                         diff_data = {
                             'case': original_row['case_diffs_words'],
@@ -443,7 +433,6 @@ if uploaded_file is not None:
                         }
                         display_text = highlight_text(str(cell_value), diff_data)
                         html_str += f"<td class='{cell_class.strip()}'>{display_text}</td>"
-                    # --- ★変更点: 「その他」列はHTMLをそのまま出力 ---
                     elif col_name == "その他":
                         html_str += f"<td class='{cell_class.strip()}'>{cell_value}</td>"
                     elif cell_value == "なし" and col_name in ["原文にない単語", "大/小文字違い", "単複の違い"]: 
@@ -457,7 +446,6 @@ if uploaded_file is not None:
         st.write(html_str, unsafe_allow_html=True)
         
         if not filtered_df.empty:
-            # CSV出力用に「その他」列をプレーンテキストに変換
             def format_other_for_csv(row):
                 parts = []
                 if row['アンダーバー連結語'] != 'なし':
@@ -469,7 +457,6 @@ if uploaded_file is not None:
                 return " | ".join(parts) if parts else "なし"
             
             csv_df = filtered_df[columns_to_display].copy()
-            # 「その他」列が存在する場合のみ処理
             if 'その他' in csv_df.columns:
                  csv_df['その他'] = filtered_df.apply(format_other_for_csv, axis=1)
 
@@ -490,7 +477,6 @@ if uploaded_file is not None:
 else:
     st.info("TMXファイルをアップロードして分析を開始してください。")
 
-# --- ★変更点: 「使い方」を更新 ---
 with st.expander("使い方"):
     st.markdown("""
     ### このアプリケーションの使い方
@@ -508,7 +494,7 @@ with st.expander("使い方"):
         - **その他 (新設)**: 以下の3つの項目をまとめて表示します。
             - **アンダーバー連結語**: 訳文に含まれるアンダースコアを含む単語が、原文に存在しない場合に表示します。
             - **ハイフン連結語**: 訳文に含まれるハイフンが2つ以上のフレーズが、原文に存在しない場合に表示します。
-            - **タグの不一致**: 原文と訳文で、`<ph>`や`<strong>`のようなインラインタグの並びが異なる場合に、その詳細を表示します。
+            - **タグの不一致**: 原文と訳文で、`<ph>`や`<strong>`のようなインラインタグの種類や数が異なる場合に、その詳細を表示します。**(タグの順序の違いは無視されます)**。
     6. **表示オプション**: テーブルに表示するセグメントをフィルタリングできます。
     7. 分析結果はCSV形式でダウンロードできます。
     
