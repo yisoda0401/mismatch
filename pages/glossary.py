@@ -182,6 +182,7 @@ def main():
 evict,削除
 evict,エビクト
 eviction,エビクション
+expand,デプロイメント
 extract,デプロイメント
 inject,挿入
 metric,メトリック
