@@ -178,7 +178,8 @@ def main():
         st.sidebar.subheader("用語ペアを入力")
         
         # デフォルトで表示するテキストエリアのテキスト
-        default_pair_text = """deploy,展開
+        default_pair_text = """cordon,遮断
+deploy,展開
 evict,削除
 evict,エビクト
 eviction,エビクション
@@ -196,6 +197,7 @@ update,更新プログラム
 deprecate,廃止
 toleration,容認
 drain,ドレイン
+drain,排出
 anti-affinity,非アフィニティー
 graceful,正常
 channel,チャンネル
