@@ -1,17 +1,56 @@
 # 必要なライブラリ
-# pip install streamlit pandas translate-toolkit
+# pip install streamlit pandas translate-toolkit openpyxl
 import streamlit as st
 import pandas as pd
 import io
+import zipfile
+import math
 from translate.storage import tmx
 
 # ページの基本設定
-st.set_page_config(page_title="TMX to CSV 変換ツール", layout="wide")
-st.title("TMX to CSV 変換ツール")
-st.subheader("TMXファイルの英語原文と日本語訳をCSV形式でダウンロード")
+st.set_page_config(page_title="TMX 変換ツール", layout="wide")
+st.title("TMX 分割・変換ツール")
+st.subheader("TMXファイルをCSVまたはExcel形式でダウンロード（分割機能付き）")
 
-# ファイルアップローダー
-uploaded_file = st.file_uploader("TMXファイルをアップロード", type=["tmx"])
+# --- ヘルパー関数 (ZIP生成) ---
+
+def convert_df_to_csv(df):
+    """DataFrameをBOM付きUTF-8 CSV (bytes) に変換"""
+    return df.to_csv(index=False).encode('utf-8-sig')
+
+def convert_df_to_excel(df):
+    """DataFrameをExcel (bytes) に変換"""
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='TMX_Export')
+    return output.getvalue()
+
+def create_zip_file(df_chunks, file_format):
+    """
+    分割されたDataFrameのリストからZIPファイルをメモリ上に生成する
+    :param df_chunks: DataFrameのリスト
+    :param file_format: 'csv' または 'excel'
+    :return: ZIPファイルのバイナリデータ (bytes)
+    """
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        for i, chunk in enumerate(df_chunks):
+            part_num = i + 1
+            
+            if file_format == 'csv':
+                file_name = f"tmx_export_part{part_num}.csv"
+                file_data = convert_df_to_csv(chunk)
+            elif file_format == 'excel':
+                file_name = f"tmx_export_part{part_num}.xlsx"
+                file_data = convert_df_to_excel(chunk)
+            else:
+                continue
+                
+            zip_file.writestr(file_name, file_data)
+            
+    return zip_buffer.getvalue()
+
+# --- TMX解析関数 ---
 
 def extract_data_from_tmx(file_content):
     """
@@ -47,7 +86,11 @@ def extract_data_from_tmx(file_content):
         st.code(traceback.format_exc())
         return None
 
-# TMXファイルがアップロードされた場合の処理
+# --- メイン処理 ---
+
+# ファイルアップローダー
+uploaded_file = st.file_uploader("TMXファイルをアップロード", type=["tmx"])
+
 if uploaded_file is not None:
     file_content = uploaded_file.read()
     
@@ -56,21 +99,94 @@ if uploaded_file is not None:
     
     # データの抽出に成功した場合
     if df is not None and not df.empty:
-        st.success(f"{len(df)} 件の翻訳ペアを抽出しました。")
+        total_rows = len(df)
+        st.success(f"{total_rows} 件の翻訳ペアを抽出しました。")
         
         st.subheader("プレビュー（先頭10件）")
         st.dataframe(df.head(10))
         
-        # DataFrameをCSVに変換
-        # BOM付きUTF-8 (utf-8-sig) にしてExcelでの文字化けを防ぐ
-        csv = df.to_csv(index=False).encode('utf-8-sig')
+        st.divider()
         
-        st.download_button(
-            label="CSV形式でダウンロード",
-            data=csv,
-            file_name="tmx_export.csv",
-            mime="text/csv",
-        )
+        # --- 分割設定 ---
+        st.subheader("ダウンロード設定")
+        split_files = st.checkbox("ファイルを分割する", value=False)
+        
+        max_rows = 10000 # デフォルト値
+        
+        if split_files:
+            max_rows = st.number_input(
+                "1ファイルあたりの最大行数", 
+                min_value=1, 
+                value=max(1, min(10000, total_rows)), # デフォルト値は10000行か全行数の少ない方
+                step=1000
+            )
+            
+            num_files = math.ceil(total_rows / max_rows)
+            st.info(f"設定に基づき、{num_files} 個のファイルに分割されます。")
+            
+            # DataFrameを分割
+            df_chunks = [df.iloc[i:i + max_rows] for i in range(0, total_rows, max_rows)]
+        else:
+            # 分割しない場合も、リストに格納して処理を共通化
+            df_chunks = [df]
+
+        st.divider()
+
+        # --- ダウンロードボタン ---
+        col1, col2 = st.columns(2)
+        
+        # --- 1. CSV形式 ---
+        with col1:
+            if split_files:
+                # 分割（ZIP）
+                csv_zip_data = create_zip_file(df_chunks, 'csv')
+                st.download_button(
+                    label="CSV (ZIP) 形式でダウンロード",
+                    data=csv_zip_data,
+                    file_name="tmx_export_csv.zip",
+                    mime="application/zip",
+                    use_container_width=True
+                )
+            else:
+                # 単一ファイル
+                csv_data = convert_df_to_csv(df)
+                st.download_button(
+                    label="CSV形式でダウンロード",
+                    data=csv_data,
+                    file_name="tmx_export.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+        
+        # --- 2. Excel (.xlsx) 形式 ---
+        with col2:
+            try:
+                if split_files:
+                    # 分割（ZIP）
+                    excel_zip_data = create_zip_file(df_chunks, 'excel')
+                    st.download_button(
+                        label="Excel (ZIP) 形式でダウンロード",
+                        data=excel_zip_data,
+                        file_name="tmx_export_excel.zip",
+                        mime="application/zip",
+                        use_container_width=True
+                    )
+                else:
+                    # 単一ファイル
+                    excel_data = convert_df_to_excel(df)
+                    st.download_button(
+                        label="Excel (.xlsx) 形式でダウンロード",
+                        data=excel_data,
+                        file_name="tmx_export.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
+            except ImportError:
+                with col2:
+                    st.error("Excelの書き出しに必要な 'openpyxl' が見つかりません。")
+            except Exception as e:
+                with col2:
+                    st.error(f"Excel生成エラー: {str(e)}")
 
     # データが空だった場合
     elif df is not None and df.empty: 
@@ -87,8 +203,10 @@ else:
 # 使い方セクション
 with st.expander("使い方"):
     st.markdown("""
-    1. 上部の「Browse files」ボタンをクリックして、CSVに変換したいTMXファイル（`.tmx`）をアップロードします。
-    2. ファイルの処理が自動的に開始されます。
-    3. 処理が完了すると、抽出された翻訳ペアの件数とプレビュー（先頭10件）が表示されます。
-    4. 「CSV形式でダウンロード」ボタンをクリックすると、すべての原文と訳文のペアが含まれるCSVファイルがダウンロードされます。
+    1. 上部の「Browse files」ボタンをクリックして、変換したいTMXファイル（`.tmx`）をアップロードします。
+    2. 処理が完了すると、抽出件数とプレビューが表示されます。
+    3. **ダウンロード設定:**
+        * そのままダウンロードする場合は、CSVまたはExcelボタンをクリックします。
+        * **ファイルを分割する場合:** 「ファイルを分割する」にチェックを入れ、1ファイルあたりの最大行数を指定します。
+    4. 対応する「(ZIP) 形式でダウンロード」ボタンをクリックすると、分割されたファイルがZIPにまとめられてダウンロードされます。
     """)
