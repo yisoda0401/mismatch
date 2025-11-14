@@ -71,8 +71,8 @@ def extract_data_from_tmx(file_content):
             if en_text and ja_text:
                 results.append({
                     "ID": idx,
-                    "英語原文 (Source)": en_text,
-                    "日本語訳 (Target)": ja_text,
+                    "Source (en-us)": en_text,
+                    "Target (ja)": ja_text,
                 })
         
         if not results:
