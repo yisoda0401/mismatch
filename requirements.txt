@@ -1,2 +1,3 @@
 pandas
 translate-toolkit
+openpyxl
