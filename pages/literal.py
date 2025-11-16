@@ -14,6 +14,49 @@ def get_full_text(element):
     # itertext() は要素内のすべてのテキストノードを再帰的に取得します
     return "".join(element.itertext()).strip().replace('\n', ' ').replace('\r', '')
 
+# --- ▼▼▼ 新しく追加した関数 ▼▼▼ ---
+def get_formatted_parent_text(element, namespace_uri="http://docbook.org/ns/docbook"):
+    """
+    指定されたXML要素内のすべてのテキストを連結して返す。
+    ただし、<literal> タグ（指定されたネームスペースの）の内容は <strong> タグで囲む。
+    """
+    if element is None:
+        return ""
+    
+    literal_tag = f"{{{namespace_uri}}}literal"
+    parts = [] # 連結する文字列のパーツを格納するリスト
+
+    # itertext() のような動作を模倣しつつ、タグをチェックする内部関数
+    def traverse(el):
+        # 1. 要素自体が <literal> かどうかをチェック
+        if el.tag == literal_tag:
+            # この要素が <literal> だったら、中身を平文で取得して <strong> で囲む
+            # 既存の get_full_text を使って、ネストされたタグも平文化する
+            literal_content = get_full_text(el)
+            parts.append(f"<strong>{html.escape(literal_content)}</strong>")
+        
+        # 2. <literal> 以外のタグ (例: <para>, <emphasis>) の場合
+        else:
+            # まず、この要素の開始テキスト (タグの直後のテキスト) を追加
+            if el.text:
+                parts.append(html.escape(el.text))
+            
+            # 次に、すべての子要素を再帰的に処理
+            for child in el:
+                traverse(child) # ここで再帰呼び出し
+            
+                # 子要素の後続テキスト (tail) を追加 (タグの閉じタグの後のテキスト)
+                if child.tail:
+                    parts.append(html.escape(child.tail))
+
+    # --- traverse 実行 ---
+    # extract_segments から渡される 'element' (親要素) に対して traverse を実行する
+    traverse(element)
+    
+    # 全てのパーツを連結し、前後の空白・改行を整理して返す
+    return "".join(parts).strip().replace('\n', ' ').replace('\r', '')
+# --- ▲▲▲ 追加ここまで ▲▲▲ ---
+
 def extract_segments(xml_content, filename):
     """
     XMLコンテンツから<literal>タグを含むセグメントを抽出する。
@@ -34,6 +77,7 @@ def extract_segments(xml_content, filename):
     # DocBookのデフォルトネームスペースを定義
     # findallなどでタグを検索する際に必要
     namespace = {'db': 'http://docbook.org/ns/docbook'}
+    namespace_uri = namespace['db'] # ★★★ 変更点 1. URIを変数として追加 ★★★
     
     # --- 親要素を取得するためのマップを作成 ---
     # XPathの'..'が古いバージョンのPythonでサポートされていない問題への対策
@@ -52,7 +96,9 @@ def extract_segments(xml_content, filename):
 
     # 抽出した親要素ごとにセグメント情報を作成
     for parent in parent_elements:
-        parent_text = get_full_text(parent)
+        
+        # ★★★ 変更点 2. get_full_text を新関数に変更 ★★★
+        parent_text = get_formatted_parent_text(parent, namespace_uri)
         
         # 親要素に直接含まれる<literal>タグの内容を取得
         literal_tags = parent.findall('db:literal', namespace)
@@ -248,10 +294,11 @@ if st.session_state.comparison_run:
             df_to_display = df
             st.info(f"全 {total_segments} セグメントの比較結果を表示します。")
 
-        # セグメント列の内容に含まれる可能性のあるHTML特殊文字をエスケープする
+        # ★★★ 変更点 3. df_for_html の処理を変更 ★★★
+        # 新関数 get_formatted_parent_text で既にエスケープ処理済みのHTML（<strong>）が
+        # 格納されているため、ここでは .copy() をするだけ。
         df_for_html = df_to_display.copy()
-        df_for_html['ソースセグメント'] = df_for_html['ソースセグメント'].apply(html.escape)
-        df_for_html['ターゲットセグメント'] = df_for_html['ターゲットセグメント'].apply(html.escape)
+        # 以前の .apply(html.escape) 処理は削除
         
         # 結果のDataFrameをHTMLとして表示
         st.markdown(

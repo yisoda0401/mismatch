@@ -229,7 +229,7 @@ channel,チャンネル
             if is_valid_format and pairs:
                 glossary_data = pd.DataFrame(pairs)
                 st.sidebar.write("チェック中の用語集:")
-                st.sidebar.dataframe(glossary_data, use_container_width=True, hide_index=True)
+                st.sidebar.dataframe(glossary_data, width='stretch', hide_index=True)
                 st.sidebar.write("用語の追加はこちら: https://docs.google.com/spreadsheets/d/1agQiUYggMyPxCyJlG7pCbBxCdYyhBUNTbPC-RSL4MuE/edit?gid=0#gid=0")
                 is_glossary_ready = True
             elif not is_valid_format:
@@ -262,35 +262,44 @@ channel,チャンネル
             glossary_data = [term.strip() for term in target_terms_input.split('\n') if term.strip()]
             if glossary_data:
                 st.sidebar.write("チェック中の用語/パターン:")
-                st.sidebar.dataframe(glossary_data, column_config={"value": "用語/パターン"}, use_container_width=True)
+                st.sidebar.dataframe(glossary_data, column_config={"value": "用語/パターン"}, width='stretch')
                 is_glossary_ready = True
 
     # --- メイン画面 ---
-    tmx_file = st.file_uploader("チェック対象のTMXファイルを選択してください", type=['tmx'], label_visibility="collapsed")
+    # accept_multiple_files=True を追加し、複数のファイルを受け取れるようにする
+    tmx_files = st.file_uploader(
+        "チェック対象のTMXファイルを選択してください（複数可）", 
+        type=['tmx'], 
+        accept_multiple_files=True, 
+        label_visibility="collapsed"
+    )
     
-    if tmx_file is not None:
+    # tmx_files はリストになる
+    if tmx_files:
         if not is_glossary_ready:
             st.warning("使用する用語集が読み込まれていません。サイドバーで用語集を設定してください。")
         else:
-            with st.spinner("TMXファイルを処理中..."):
-                tmx_file_content = tmx_file.getvalue()
-                results_df = perform_check(tmx_file_content, glossary_data, check_mode)
+            # アップロードされたファイルを1つずつ処理する
+            for tmx_file in tmx_files:
+                st.markdown("---") # ファイルごとに区切り線を入れる
+                st.subheader(f"チェック結果: `{tmx_file.name}`") # ファイル名を表示
 
-                st.subheader("チェック結果")
-                if results_df.empty:
-                    st.info("✅ 条件に一致するセグメントは見つかりませんでした。")
-                else:
-                    # 結果が見つかった場合のメッセージをモードによって変更
-                    if check_mode == '訳文のみチェック':
-                        st.success(f"✅ 訳文内に {len(results_df)}件のパターン一致が確認されました。")
+                with st.spinner(f"`{tmx_file.name}` を処理中..."):
+                    tmx_file_content = tmx_file.getvalue()
+                    results_df = perform_check(tmx_file_content, glossary_data, check_mode)
+
+                    if results_df.empty:
+                        st.info("✅ 条件に一致するセグメントは見つかりませんでした。")
                     else:
-                        st.success(f"✅ {len(results_df)}件の用語ペア使用が確認されました。")
+                        # 結果が見つかった場合のメッセージをモードによって変更
+                        if check_mode == '訳文のみチェック':
+                            st.success(f"✅ 訳文内に {len(results_df)}件のパターン一致が確認されました。")
+                        else:
+                            st.success(f"✅ {len(results_df)}件の用語ペア使用が確認されました。")
 
-                    # to_htmlでHTMLテーブルに変換し、st.markdownで表示
-                    # これにより、<mark>タグがハイライトとして描画される
-                    html_table = results_df.to_html(escape=False, index=False)
-                    st.markdown(html_table, unsafe_allow_html=True)
+                        # to_htmlでHTMLテーブルに変換し、st.markdownで表示
+                        html_table = results_df.to_html(escape=False, index=False)
+                        st.markdown(html_table, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
-
