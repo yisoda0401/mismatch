@@ -187,6 +187,7 @@ expand,デプロイメント
 extract,デプロイメント
 inject,挿入
 metric,メトリック
+metric,メトリックス
 overridden,上書き
 override,上書き
 overriding,上書き
