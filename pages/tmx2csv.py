@@ -5,6 +5,7 @@ import pandas as pd
 import io
 import zipfile
 import math
+import os
 from translate.storage import tmx
 
 # ページの基本設定
@@ -25,11 +26,12 @@ def convert_df_to_excel(df):
         df.to_excel(writer, index=False, sheet_name='TMX_Export')
     return output.getvalue()
 
-def create_zip_file(df_chunks, file_format):
+def create_zip_file(df_chunks, file_format, base_name):
     """
     分割されたDataFrameのリストからZIPファイルをメモリ上に生成する
     :param df_chunks: DataFrameのリスト
     :param file_format: 'csv' または 'excel'
+    :param base_name: 出力ファイルのベース名（拡張子なし）
     :return: ZIPファイルのバイナリデータ (bytes)
     """
     zip_buffer = io.BytesIO()
@@ -38,10 +40,10 @@ def create_zip_file(df_chunks, file_format):
             part_num = i + 1
             
             if file_format == 'csv':
-                file_name = f"tmx_export_part{part_num}.csv"
+                file_name = f"{base_name}_part{part_num}.csv"
                 file_data = convert_df_to_csv(chunk)
             elif file_format == 'excel':
-                file_name = f"tmx_export_part{part_num}.xlsx"
+                file_name = f"{base_name}_part{part_num}.xlsx"
                 file_data = convert_df_to_excel(chunk)
             else:
                 continue
@@ -93,6 +95,9 @@ uploaded_file = st.file_uploader("TMXファイルをアップロード", type=["
 
 if uploaded_file is not None:
     file_content = uploaded_file.read()
+    
+    # 入力ファイル名からベース名（拡張子なし）を取得
+    base_name = os.path.splitext(uploaded_file.name)[0]
     
     with st.spinner("TMXファイルを処理中..."):
         df = extract_data_from_tmx(file_content)
@@ -207,11 +212,11 @@ if uploaded_file is not None:
         with col1:
             if split_files:
                 # 分割（ZIP）
-                csv_zip_data = create_zip_file(df_chunks, 'csv')
+                csv_zip_data = create_zip_file(df_chunks, 'csv', base_name)
                 st.download_button(
                     label="CSV (ZIP) 形式でダウンロード",
                     data=csv_zip_data,
-                    file_name="tmx_export_csv.zip",
+                    file_name=f"{base_name}_csv.zip",
                     mime="application/zip",
                     width="stretch"
                 )
@@ -221,7 +226,7 @@ if uploaded_file is not None:
                 st.download_button(
                     label="CSV形式でダウンロード",
                     data=csv_data,
-                    file_name="tmx_export.csv",
+                    file_name=f"{base_name}.csv",
                     mime="text/csv",
                     width="stretch"
                 )
@@ -231,11 +236,11 @@ if uploaded_file is not None:
             try:
                 if split_files:
                     # 分割（ZIP）
-                    excel_zip_data = create_zip_file(df_chunks, 'excel')
+                    excel_zip_data = create_zip_file(df_chunks, 'excel', base_name)
                     st.download_button(
                         label="Excel (ZIP) 形式でダウンロード",
                         data=excel_zip_data,
-                        file_name="tmx_export_excel.zip",
+                        file_name=f"{base_name}_excel.zip",
                         mime="application/zip",
                         width="stretch"
                     )
@@ -245,7 +250,7 @@ if uploaded_file is not None:
                     st.download_button(
                         label="Excel (.xlsx) 形式でダウンロード",
                         data=excel_data,
-                        file_name="tmx_export.xlsx",
+                        file_name=f"{base_name}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         width="stretch"
                     )
