@@ -5,6 +5,7 @@ import xml.etree.ElementTree as ET
 import io
 import os
 import re
+import zipfile
 
 # ページの基本設定
 st.set_page_config(page_title="DocBook XML to Markdown 変換ツール", layout="wide")
@@ -571,6 +572,19 @@ def convert_table(element):
     return '\n'.join(result)
 
 
+def create_markdown_zip(converted_files):
+    """
+    変換済みファイルのリストからZIPを生成
+    :param converted_files: [(filename, markdown_content), ...] のリスト
+    :return: ZIPファイルのバイナリデータ
+    """
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        for filename, content in converted_files:
+            zip_file.writestr(filename, content.encode('utf-8'))
+    return zip_buffer.getvalue()
+
+
 def convert_xml_to_markdown(xml_content):
     """
     XMLコンテンツをMarkdownに変換するメイン関数
@@ -603,89 +617,115 @@ def convert_xml_to_markdown(xml_content):
 
 # --- メイン処理 ---
 
-# ファイルアップローダー
-uploaded_file = st.file_uploader("DocBook XMLファイルをアップロード", type=["xml"])
+# ファイルアップローダー（複数ファイル対応）
+uploaded_files = st.file_uploader(
+    "DocBook XMLファイルをアップロード（複数選択可）",
+    type=["xml"],
+    accept_multiple_files=True
+)
 
-if uploaded_file is not None:
-    file_content = uploaded_file.read()
-    
-    # 入力ファイル名からベース名（拡張子なし）を取得
-    base_name = os.path.splitext(uploaded_file.name)[0]
+if uploaded_files:
+    # 複数ファイルの変換処理
+    converted_files = []  # [(filename.md, content), ...]
+    errors = []  # [(filename, error_message), ...]
     
     with st.spinner("XMLファイルを変換中..."):
-        try:
-            markdown_content = convert_xml_to_markdown(file_content)
-            
-            st.success("変換が完了しました！")
-            
-            st.divider()
-            
-            # --- ダウンロード ---
-            st.subheader("ダウンロード")
-            
-            # Markdownファイルとしてダウンロード
-            st.download_button(
-                label="Markdownファイルをダウンロード",
-                data=markdown_content.encode('utf-8'),
-                file_name=f"{base_name}.md",
-                mime="text/markdown"
-            )
-            
-            # 使い方セクション
-            with st.expander("使い方"):
-                st.markdown("""
-                1. 上部の「Browse files」ボタンをクリックして、変換したいDocBook XMLファイル（`.xml`）をアップロードします。
-                2. 処理が完了すると、変換結果がプレビュー表示されます。
-                3. 「Markdownソース」タブで生のMarkdownテキストを確認できます。
-                4. 「レンダリング結果」タブでMarkdownのレンダリング結果を確認できます。
-                5. 「Markdownファイルをダウンロード」ボタンをクリックして、変換結果をダウンロードします。
-                """)
+        for uploaded_file in uploaded_files:
+            base_name = os.path.splitext(uploaded_file.name)[0]
+            try:
+                file_content = uploaded_file.read()
+                markdown_content = convert_xml_to_markdown(file_content)
+                converted_files.append((f"{base_name}.md", markdown_content))
+            except ValueError as e:
+                errors.append((uploaded_file.name, str(e)))
+            except Exception as e:
+                errors.append((uploaded_file.name, f"予期しないエラー: {str(e)}"))
+    
+    # 結果サマリーの表示
+    total_files = len(uploaded_files)
+    success_count = len(converted_files)
+    error_count = len(errors)
+    
+    if success_count > 0:
+        st.success(f"変換完了: {success_count}件成功 / {total_files}件中")
+    
+    if error_count > 0:
+        st.warning(f"変換失敗: {error_count}件")
+        with st.expander("エラー詳細"):
+            for filename, error_msg in errors:
+                st.error(f"**{filename}**: {error_msg}")
+    
+    # 変換成功したファイルがある場合
+    if converted_files:
+        st.divider()
+        
+        # --- ダウンロード ---
+        st.subheader("ダウンロード")
+        
+        # ZIPファイルとしてダウンロード
+        zip_data = create_markdown_zip(converted_files)
+        st.download_button(
+            label=f"ZIPファイルをダウンロード（{success_count}ファイル）",
+            data=zip_data,
+            file_name="converted_markdown.zip",
+            mime="application/zip"
+        )
+        
+        # 使い方セクション
+        with st.expander("使い方"):
+            st.markdown("""
+            1. 上部の「Browse files」ボタンをクリックして、変換したいDocBook XMLファイル（`.xml`）をアップロードします。
+               - 複数ファイルを同時に選択できます。
+            2. 処理が完了すると、変換結果のサマリーが表示されます。
+            3. 「ZIPファイルをダウンロード」ボタンをクリックして、変換結果をまとめてダウンロードします。
+            4. 「表示するファイルを選択」ドロップダウンでファイルを選択し、プレビューを確認できます。
+            """)
 
-            with st.expander("対応要素"):
-                st.markdown("""
-                このツールは以下のDocBook 5.0要素に対応しています：
-                
-                **構造要素:**
-                - `book`, `info`, `chapter`, `section`
-                
-                **ブロック要素:**
-                - `simpara`, `para` - 段落
-                - `itemizedlist`, `orderedlist` - リスト
-                - `variablelist` - 定義リスト
-                - `literallayout`, `screen`, `programlisting` - コードブロック
-                - `table`, `informaltable` - テーブル
-                - `figure`, `mediaobject` - 画像
-                - `procedure` - 手順
-                
-                **インライン要素:**
-                - `emphasis` - 強調（イタリック/太字）
-                - `literal`, `code`, `filename`, `command` - コード
-                - `link` - リンク
-                
-                **アドモニション:**
-                - `note`, `important`, `warning`, `tip`, `caution`
-                """)
+        with st.expander("対応要素"):
+            st.markdown("""
+            このツールは以下のDocBook 5.0要素に対応しています：
             
-            st.divider()
+            **構造要素:**
+            - `book`, `info`, `chapter`, `section`
             
-            # --- プレビュー ---
-            st.subheader("プレビュー")
+            **ブロック要素:**
+            - `simpara`, `para` - 段落
+            - `itemizedlist`, `orderedlist` - リスト
+            - `variablelist` - 定義リスト
+            - `literallayout`, `screen`, `programlisting` - コードブロック
+            - `table`, `informaltable` - テーブル
+            - `figure`, `mediaobject` - 画像
+            - `procedure` - 手順
             
-            # タブでMarkdownソースとレンダリング結果を表示
-            tab1, tab2 = st.tabs(["Markdownソース", "レンダリング結果"])
+            **インライン要素:**
+            - `emphasis` - 強調（イタリック/太字）
+            - `literal`, `code`, `filename`, `command` - コード
+            - `link` - リンク
             
-            with tab1:
-                st.code(markdown_content, language="markdown")
-            
-            with tab2:
-                st.markdown(markdown_content)
-            
-        except ValueError as e:
-            st.error(str(e))
-        except Exception as e:
-            st.error(f"予期しないエラーが発生しました: {str(e)}")
-            import traceback
-            st.code(traceback.format_exc())
+            **アドモニション:**
+            - `note`, `important`, `warning`, `tip`, `caution`
+            """)
+        
+        st.divider()
+        
+        # --- プレビュー ---
+        st.subheader("プレビュー")
+        
+        # ファイル選択ドロップダウン
+        file_options = [name for name, _ in converted_files]
+        selected_file = st.selectbox("表示するファイルを選択", file_options)
+        
+        # 選択されたファイルの内容を取得
+        selected_content = dict(converted_files)[selected_file]
+        
+        # タブでMarkdownソースとレンダリング結果を表示
+        tab1, tab2 = st.tabs(["Markdownソース", "レンダリング結果"])
+        
+        with tab1:
+            st.code(selected_content, language="markdown")
+        
+        with tab2:
+            st.markdown(selected_content)
 
 else:
-    st.info("DocBook XMLファイルをアップロードして変換を開始してください。")
+    st.info("DocBook XMLファイルをアップロードして変換を開始してください。（複数ファイル選択可）")
