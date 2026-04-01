@@ -52,6 +52,13 @@ def create_zip_file(df_chunks, file_format, base_name):
             
     return zip_buffer.getvalue()
 
+def dedupe_translation_pairs(df):
+    """原文・訳文が同一の行の重複を除き、ID を 1 から振り直す。"""
+    subset = ["Source (en-us)", "Target (ja)"]
+    out = df.drop_duplicates(subset=subset, keep="first").reset_index(drop=True)
+    out["ID"] = range(1, len(out) + 1)
+    return out
+
 # --- TMX解析関数 ---
 
 def extract_data_from_tmx(file_content):
@@ -100,12 +107,27 @@ if uploaded_file is not None:
     base_name = os.path.splitext(uploaded_file.name)[0]
     
     with st.spinner("TMXファイルを処理中..."):
-        df = extract_data_from_tmx(file_content)
+        df_extracted = extract_data_from_tmx(file_content)
     
     # データの抽出に成功した場合
-    if df is not None and not df.empty:
+    if df_extracted is not None and not df_extracted.empty:
+        st.success(f"{len(df_extracted)} 件の翻訳ペアを抽出しました。")
+        
+        dedupe_enabled = st.checkbox(
+            "重複エントリを除外（原文・訳文が同じ行は先頭のみ残す）",
+            value=False,
+            help="Source と Target の文字列がともに一致する行は、先頭の1件だけを残します。",
+        )
+        if dedupe_enabled:
+            df = dedupe_translation_pairs(df_extracted)
+            removed = len(df_extracted) - len(df)
+            st.info(
+                f"重複除外後: {len(df)} 件（{removed} 件の重複を除外。元の抽出件数: {len(df_extracted)} 件）"
+            )
+        else:
+            df = df_extracted
+        
         total_rows = len(df)
-        st.success(f"{total_rows} 件の翻訳ペアを抽出しました。")
         
         st.divider()
         
@@ -262,7 +284,7 @@ if uploaded_file is not None:
                     st.error(f"Excel生成エラー: {str(e)}")
 
     # データが空だった場合
-    elif df is not None and df.empty: 
+    elif df_extracted is not None and df_extracted.empty:
         st.info("TMXファイルからデータを抽出できませんでした。")
     
     #
@@ -278,13 +300,14 @@ with st.expander("使い方"):
     st.markdown("""
     1. 上部の「Browse files」ボタンをクリックして、変換したいTMXファイル（`.tmx`）をアップロードします。
     2. 処理が完了すると、抽出件数が表示されます。
-    3. **検索機能（オプション）:**
+    3. **重複除外（オプション）:** 「重複エントリを除外」にチェックを入れると、原文と訳文の文字列がともに同じ行は先頭の1件だけが残ります。検索・プレビュー・ダウンロードの対象もこの結果に合わせます。
+    4. **検索機能（オプション）:**
         * 「検索キーワード」に文字列を入力すると、データをフィルタリングできます。
         * **検索対象**: 「原文のみ」「訳文のみ」「原文と訳文両方」から選択できます。
         * **大文字・小文字を区別する**: チェックを入れると、大文字・小文字を区別して検索します。
         * 検索結果はそのままダウンロードできます。
-    4. **ダウンロード設定:**
+    5. **ダウンロード設定:**
         * そのままダウンロードする場合は、CSVまたはExcelボタンをクリックします。
         * **ファイルを分割する場合:** 「ファイルを分割する」にチェックを入れ、1ファイルあたりの最大行数を指定します。
-    5. 対応する「(ZIP) 形式でダウンロード」ボタンをクリックすると、分割されたファイルがZIPにまとめられてダウンロードされます。
+    6. 対応する「(ZIP) 形式でダウンロード」ボタンをクリックすると、分割されたファイルがZIPにまとめられてダウンロードされます。
     """)
